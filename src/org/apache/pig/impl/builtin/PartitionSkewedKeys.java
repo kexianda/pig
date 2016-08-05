@@ -224,6 +224,9 @@ public class PartitionSkewedKeys extends EvalFunc<Map<String, Object>> {
         // get the number of tuples that can fit into memory
         long tupleMCount = (tupleMCount_ <= 0)?(long) (totalMemory_ / avgM): tupleMCount_;
 
+        // Xianda: for debugging
+        tupleMCount = 200;
+
         // estimate the number of total tuples for this key
         long keyTupleCount = (long)  ( ((double) count/ totalSampleCount_) * totalTuples);
 

@@ -137,6 +137,10 @@ public class PoissonSampleLoader extends SampleLoader {
         // is OK
         if(numRowsSampled < 5)
             skipInterval = skipInterval/(10-numRowsSampled);
+
+        //Xianda: for debugging
+        skipInterval = 10;
+
         ++numRowsSampled;
 
     }

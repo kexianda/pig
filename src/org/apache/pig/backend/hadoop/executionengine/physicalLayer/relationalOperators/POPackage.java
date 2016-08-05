@@ -235,6 +235,10 @@ public class POPackage extends PhysicalOperator {
 
                 // create bag to pull all tuples out of iterator
                 for (int i = 0; i < numInputs; i++) {
+
+                    //TODO: Xianda: just for debugging
+                    useDefaultBag = true;
+
                     dbs[i] = useDefaultBag ? mBagFactory.newDefaultBag()
                             // In a very rare case if there is a POStream after this
                             // POPackage in the pipeline and is also blocking the
