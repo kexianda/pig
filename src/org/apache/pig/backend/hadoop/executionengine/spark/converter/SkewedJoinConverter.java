@@ -21,7 +21,13 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
+import com.google.common.collect.Maps;
+import org.apache.pig.impl.util.Pair;
+import org.apache.spark.Partitioner;
+import org.apache.spark.SparkContext;
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
 
@@ -49,6 +55,11 @@ public class SkewedJoinConverter implements
 
     private POLocalRearrange[] LRs;
     private POSkewedJoin poSkewedJoin;
+//    private final SparkContext sc;
+//
+//    public SkewedJoinConverter(SparkContext sc) {
+//        this.sc = sc;
+//    }
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
@@ -80,7 +91,7 @@ public class SkewedJoinConverter implements
 
         // join() returns (key, (t1, t2)) where (key, t1) is in this and (key, t2) is in other
         JavaPairRDD<IndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = rdd1Pair_javaRDD
-                .join(rdd2Pair_javaRDD);
+                .join(rdd2Pair_javaRDD, new SkewedJoinPartitioner());
 
         // map to get JavaRDD<Tuple> from JAvaPairRDD<IndexedKey, Tuple2<Tuple, Tuple>> by
         // ignoring the key (of type IndexedKey) and appending the values (the
@@ -212,5 +223,55 @@ public class SkewedJoinConverter implements
                 Iterator<Tuple2<IndexedKey, Tuple2<Tuple, Tuple>>> input) {
             return new Tuple2TransformIterable(input);
         }
+    }
+
+    private static class SkewedJoinPartitioner extends Partitioner {
+        private int parallelism = 5;
+
+        //transient ?
+        //todo: reducermap comes from broadcast variable
+        protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
+
+        transient private Map<Tuple, Integer> currentIndexMap = Maps.newHashMap();
+
+        @Override
+        public int numPartitions() {
+            return parallelism;
+        }
+
+        @Override
+        public int getPartition(Object key) {
+
+            //Broadcast<Map<Tuple, Pair<Integer, Integer>>> distFile;
+            //init. to be removed
+            reducerMap = Maps.newHashMap();
+            //reducerMap.put()
+
+            if (key instanceof IndexedKey){
+                //my logic
+                IndexedKey idxKey = (IndexedKey)key;
+
+                //todo: dispatch tuple to a partition
+                //should be same logic as
+                //idxKey.getKey()
+
+                //just for testing. passed!
+                int code = idxKey.getKey().hashCode() % parallelism;
+                if (code >= 0) {
+                    return code;
+                } else {
+                    return code + parallelism;
+                }
+            } else {
+                int code = key.hashCode() % parallelism;
+                if (code >= 0) {
+                    return code;
+                } else {
+                    return code + parallelism;
+                }
+            }
+        }
+
+
     }
 }
