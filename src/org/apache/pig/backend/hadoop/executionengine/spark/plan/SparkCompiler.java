@@ -70,6 +70,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.NativeSparkOperator;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POBroadcast;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
 import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.io.FileLocalizer;
@@ -675,6 +676,15 @@ public class SparkCompiler extends PhyPlanVisitor {
     @Override
     public void visitSkewedJoin(POSkewedJoin op) throws VisitorException {
         try {
+
+            //new OperatorKey(scope,nig.getNextNodeId(scope)
+            SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
+            PhysicalPlan samplePhyPlan = sampleSparkOp.physicalPlan;
+            POBroadcast poBroadcastPo = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
+            samplePhyPlan.addAsLeaf(poBroadcastPo);
+            sparkPlan.connect(sampleSparkOp, curSparkOp);
+
             addToPlan(op);
             phyToSparkOpMap.put(op, curSparkOp);
         } catch (Exception e) {
