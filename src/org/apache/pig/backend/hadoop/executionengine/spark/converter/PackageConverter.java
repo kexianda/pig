@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.runtime.AbstractFunction1;
 
 import org.apache.commons.logging.Log;
@@ -40,7 +42,7 @@ import org.apache.pig.impl.io.PigNullableWritable;
 import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({ "serial" })
-public class PackageConverter implements RDDConverter<Tuple, Tuple, POPackage> {
+public class PackageConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POPackage> {
     private static final Log LOG = LogFactory.getLog(PackageConverter.class);
 
     private transient JobConf jobConf;
@@ -52,6 +54,7 @@ public class PackageConverter implements RDDConverter<Tuple, Tuple, POPackage> {
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             POPackage physicalOperator) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
         RDD<Tuple> rdd = predecessors.get(0);

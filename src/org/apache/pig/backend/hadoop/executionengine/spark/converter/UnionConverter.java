@@ -19,7 +19,9 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.collection.JavaConversions;
 
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
@@ -29,7 +31,7 @@ import org.apache.spark.SparkContext;
 import org.apache.spark.rdd.RDD;
 import org.apache.spark.rdd.UnionRDD;
 
-public class UnionConverter implements RDDConverter<Tuple, Tuple, POUnion> {
+public class UnionConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POUnion> {
 
     private final SparkContext sc;
 
@@ -39,6 +41,7 @@ public class UnionConverter implements RDDConverter<Tuple, Tuple, POUnion> {
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             POUnion physicalOperator) throws IOException {
         SparkUtil.assertPredecessorSizeGreaterThan(predecessors,
                 physicalOperator, 0);

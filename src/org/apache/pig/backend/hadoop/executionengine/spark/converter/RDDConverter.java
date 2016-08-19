@@ -19,15 +19,17 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
 /**
- * Given an RDD and a PhysicalOperater, and implementation of this class can
+ * Given an RDD, broadcasted variables and a PhysicalOperater, and implementation of this class can
  * convert the RDD to another RDD.
  */
-public interface RDDConverter<IN, OUT, T extends PhysicalOperator> {
-    RDD<OUT> convert(List<RDD<IN>> rdd, T physicalOperator) throws IOException;
+public interface RDDConverter<IN, BROADCAST, OUT, T extends PhysicalOperator> {
+    RDD<OUT> convert(List<RDD<IN>> rdd, Map<String, Broadcast<BROADCAST>> broadcastedVars, T physicalOperator) throws IOException;
 }

@@ -20,11 +20,12 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
-import org.apache.pig.tools.pigstats.PigStatsUtil;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
 import org.apache.pig.tools.pigstats.spark.SparkPigStatusReporter;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 
 import org.apache.commons.logging.Log;
@@ -57,7 +58,7 @@ import com.google.common.collect.Lists;
  */
 @SuppressWarnings({ "serial" })
 public class StoreConverter implements
-        RDDConverter<Tuple, Tuple2<Text, Tuple>, POStore> {
+        RDDConverter<Tuple, List<Tuple>, Tuple2<Text, Tuple>, POStore> {
 
   private static final Log LOG = LogFactory.getLog(StoreConverter.class);
 
@@ -69,6 +70,7 @@ public class StoreConverter implements
 
     @Override
     public RDD<Tuple2<Text, Tuple>> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             POStore op) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, op, 1);
         RDD<Tuple> rdd = predecessors.get(0);

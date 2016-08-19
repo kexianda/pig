@@ -677,15 +677,17 @@ public class SparkCompiler extends PhyPlanVisitor {
     public void visitSkewedJoin(POSkewedJoin op) throws VisitorException {
         try {
 
-            //new OperatorKey(scope,nig.getNextNodeId(scope)
             SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
             sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
             PhysicalPlan samplePhyPlan = sampleSparkOp.physicalPlan;
-            POBroadcast poBroadcastPo = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
-            samplePhyPlan.addAsLeaf(poBroadcastPo);
-            sparkPlan.connect(sampleSparkOp, curSparkOp);
+            POBroadcast poBroadcast = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
+            samplePhyPlan.addAsLeaf(poBroadcast);
+			sparkPlan.add(sampleSparkOp);
 
             addToPlan(op);
+			curSparkOp.setSkewedJoinPartitionFile(poBroadcast.getOperatorKey().toString());
+			sparkPlan.connect(sampleSparkOp, curSparkOp);
+
             phyToSparkOpMap.put(op, curSparkOp);
         } catch (Exception e) {
             int errCode = 2034;

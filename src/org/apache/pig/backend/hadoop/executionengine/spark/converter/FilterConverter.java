@@ -20,8 +20,10 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.runtime.AbstractFunction1;
 
 import org.apache.hadoop.mapred.JobConf;
@@ -45,7 +47,7 @@ import org.apache.spark.rdd.RDD;
  * Converter that converts an RDD to a filtered RRD using POFilter
  */
 @SuppressWarnings({ "serial" })
-public class FilterConverter implements RDDConverter<Tuple, Tuple, POFilter> {
+public class FilterConverter implements RDDConverter<Tuple, List<Tuple>,Tuple, POFilter> {
 
     private byte[] confBytes;
 
@@ -55,6 +57,7 @@ public class FilterConverter implements RDDConverter<Tuple, Tuple, POFilter> {
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             POFilter physicalOperator) {
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
         RDD<Tuple> rdd = predecessors.get(0);

@@ -20,7 +20,9 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
 import scala.runtime.AbstractFunction2;
@@ -34,11 +36,12 @@ import org.apache.spark.rdd.PairRDDFunctions;
 import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({ "serial" })
-public class DistinctConverter implements RDDConverter<Tuple, Tuple, PODistinct> {
+public class DistinctConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, PODistinct> {
     private static final Log LOG = LogFactory.getLog(DistinctConverter.class);
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             PODistinct op) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, op, 1);
         RDD<Tuple> rdd = predecessors.get(0);

@@ -41,11 +41,14 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.UDFFinishVis
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.SkewedJoinConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.NativeSparkOperator;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POBroadcast;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOpPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperPlan;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperator;
@@ -57,6 +60,7 @@ import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.tools.pigstats.spark.SparkPigStats;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
 import com.google.common.collect.Lists;
@@ -74,6 +78,8 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
     private SparkOperPlan sparkPlan = null;
     private Map<OperatorKey, RDD<Tuple>> sparkOpRdds = new HashMap<OperatorKey, RDD<Tuple>>();
     private Map<OperatorKey, RDD<Tuple>> physicalOpRdds = new HashMap<OperatorKey, RDD<Tuple>>();
+    private Map<String, Broadcast<List<Tuple>>> bcVarsMap = new HashMap();
+
     private JobConf jobConf = null;
 
     public JobGraphBuilder(SparkOperPlan plan, Map<Class<? extends PhysicalOperator>, RDDConverter> convertMap, SparkPigStats sparkStats, JavaSparkContext sparkContext, JobMetricsListener jobMetricsListener, String jobGroupID, JobConf jobConf) {
@@ -169,6 +175,11 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                 }
             }
 
+            List<POBroadcast> broadcasts = PlanHelper.getPhysicalOperators(
+                    sparkOperator.physicalPlan, POBroadcast.class);
+            if (broadcasts.size() > 0) {
+                //TODO: collect broadcast job metrics...
+            }
 
             List<POStore> poStores = PlanHelper.getPhysicalOperators(
                     sparkOperator.physicalPlan, POStore.class);
@@ -219,6 +230,14 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
             }
         }
 
+        //sparkOperator.isCogroup()
+        if (physicalOperator instanceof POBroadcast) {
+            //POBroadcast poBroadcast = (POBroadcast) physicalOperator;
+            //poBroadcast.setBroadcastedVarsMap(bcVarsMap);
+
+            //POSkewedJoin poSkewedJoin
+        }
+
 
         if (physicalOperator instanceof POSplit) {
             List<PhysicalPlan> successorPlans = ((POSplit) physicalOperator).getPlans();
@@ -238,11 +257,16 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                         "Pig on Spark does not support Physical Operator: " + physicalOperator);
             }
 
+            if (sparkOperator.isSkewedJoin() && converter instanceof SkewedJoinConverter) {
+                SkewedJoinConverter skewedJoinConverter = (SkewedJoinConverter) converter;
+                skewedJoinConverter.setSkewedJoinPartitionFile(sparkOperator.getSkewedJoinPartitionFile());
+            }
+
             LOG.info("Converting operator "
                     + physicalOperator.getClass().getSimpleName() + " "
                     + physicalOperator);
             List<RDD<Tuple>> allPredRDDs = sortPredecessorRDDs(operatorKeysOfAllPreds);
-            nextRDD = converter.convert(allPredRDDs, physicalOperator);
+            nextRDD = converter.convert(allPredRDDs, bcVarsMap, physicalOperator);
 
             if (nextRDD == null) {
                 throw new IllegalArgumentException(

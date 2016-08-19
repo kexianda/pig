@@ -20,7 +20,9 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.runtime.AbstractFunction1;
 
 import org.apache.commons.logging.Log;
@@ -35,12 +37,13 @@ import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({ "serial" })
 public class LocalRearrangeConverter implements
-        RDDConverter<Tuple, Tuple, PhysicalOperator> {
+        RDDConverter<Tuple, List<Tuple>, Tuple, PhysicalOperator> {
     private static final Log LOG = LogFactory
             .getLog(LocalRearrangeConverter.class);
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             PhysicalOperator physicalOperator) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
         RDD<Tuple> rdd = predecessors.get(0);

@@ -20,7 +20,9 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
 import scala.runtime.AbstractFunction2;
@@ -44,13 +46,15 @@ import org.apache.spark.rdd.PairRDDFunctions;
 import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({"serial"})
-public class ReduceByConverter implements RDDConverter<Tuple, Tuple, POReduceBySpark> {
+public class ReduceByConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POReduceBySpark> {
     private static final Log LOG = LogFactory.getLog(ReduceByConverter.class);
 
     private static final TupleFactory tf = TupleFactory.getInstance();
 
     @Override
-    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, POReduceBySpark op) throws IOException {
+    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+                              POReduceBySpark op) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, op, 1);
         int parallelism = SparkUtil.getParallelism(predecessors, op);
 

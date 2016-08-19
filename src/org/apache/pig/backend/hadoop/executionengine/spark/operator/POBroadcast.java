@@ -23,9 +23,16 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlan
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.VisitorException;
+import org.apache.spark.broadcast.Broadcast;
+
+import java.util.List;
+import java.util.Map;
 
 
 public class POBroadcast extends PhysicalOperator {
+
+    private Map<OperatorKey, Broadcast<List<Tuple>>> broadcastedVarsMap;
+
     public POBroadcast(OperatorKey k) {
         super(k);
     }
@@ -52,11 +59,19 @@ public class POBroadcast extends PhysicalOperator {
 
     @Override
     public String name() {
-        return null;
+        return "Broadcast";
     }
 
     @Override
     public void visit(PhyPlanVisitor v) throws VisitorException {
-        //v.visitPOForEach(this);
+        v.visitBroadcast(this);
+    }
+
+    public void setBroadcastedVarsMap(Map<OperatorKey,Broadcast<List<Tuple>>> broadcastedVarsMap) {
+        this.broadcastedVarsMap = broadcastedVarsMap;
+    }
+
+    public Map<OperatorKey,Broadcast<List<Tuple>>> getBroadcastedVarsMap() {
+        return this.broadcastedVarsMap;
     }
 }

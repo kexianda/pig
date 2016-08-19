@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
 
@@ -36,13 +38,15 @@ import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings("serial")
-public class SortConverter implements RDDConverter<Tuple, Tuple, POSort> {
+public class SortConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POSort> {
     private static final Log LOG = LogFactory.getLog(SortConverter.class);
 
     private static final FlatMapFunction<Iterator<Tuple2<Tuple, Object>>, Tuple> TO_VALUE_FUNCTION = new ToValueFunction();
 
     @Override
-    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, POSort sortOperator)
+    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+                              POSort sortOperator)
             throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, sortOperator, 1);
         RDD<Tuple> rdd = predecessors.get(0);

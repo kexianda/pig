@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
 
@@ -40,10 +42,11 @@ import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings("serial")
 public class MergeJoinConverter implements
-        RDDConverter<Tuple, Tuple, POMergeJoin> {
+        RDDConverter<Tuple, List<Tuple>,Tuple, POMergeJoin> {
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
                               POMergeJoin poMergeJoin) throws IOException {
 
         SparkUtil.assertPredecessorSize(predecessors, poMergeJoin, 2);

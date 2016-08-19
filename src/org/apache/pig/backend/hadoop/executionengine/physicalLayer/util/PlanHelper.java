@@ -78,6 +78,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POBroadcast;
 import org.apache.pig.impl.plan.DependencyOrderWalker;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.VisitorException;
@@ -492,6 +493,12 @@ public class PlanHelper {
         public void visitPoissonSample(POPoissonSample poissonSample) throws VisitorException {
             super.visitPoissonSample(poissonSample);
             visit(poissonSample);
+        }
+
+        @Override
+        public void visitBroadcast(POBroadcast broadcast) throws VisitorException {
+            super.visitBroadcast(broadcast);
+            visit(broadcast);
         }
     }
 

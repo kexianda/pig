@@ -22,6 +22,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -33,14 +34,16 @@ import org.apache.pig.data.Tuple;
 import org.apache.pig.data.TupleFactory;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
-public class CounterConverter implements RDDConverter<Tuple, Tuple, POCounter> {
+public class CounterConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POCounter> {
 
 	private static final Log LOG = LogFactory.getLog(CounterConverter.class);
 	
 	@Override
-	public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, 
+	public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+			Map<String, Broadcast<List<Tuple>>> broadcastedVars,
 			POCounter poCounter) throws IOException {
 		SparkUtil.assertPredecessorSize(predecessors, poCounter, 1);
         RDD<Tuple> rdd = predecessors.get(0);

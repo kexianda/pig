@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.apache.hadoop.mapred.JobConf;
@@ -41,13 +42,14 @@ import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.util.ObjectSerializer;
 import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
 /**
  * Convert that is able to convert an RRD to another RRD using a POForEach
  */
 @SuppressWarnings({"serial" })
-public class ForEachConverter implements RDDConverter<Tuple, Tuple, POForEach> {
+public class ForEachConverter implements RDDConverter<Tuple, List<Tuple>,Tuple, POForEach> {
 
     private byte[] confBytes;
 
@@ -57,6 +59,7 @@ public class ForEachConverter implements RDDConverter<Tuple, Tuple, POForEach> {
 
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+            Map<String, Broadcast<List<Tuple>>> broadcastedVars,
             POForEach physicalOperator) {
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
         RDD<Tuple> rdd = predecessors.get(0);

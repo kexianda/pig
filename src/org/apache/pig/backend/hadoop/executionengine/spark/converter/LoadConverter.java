@@ -30,6 +30,7 @@ import org.apache.pig.impl.util.UDFContext;
 import org.apache.pig.tools.pigstats.spark.SparkCounters;
 import org.apache.pig.tools.pigstats.spark.SparkPigStatusReporter;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
+import org.apache.spark.broadcast.Broadcast;
 import scala.Function1;
 import scala.Tuple2;
 import scala.runtime.AbstractFunction1;
@@ -61,7 +62,7 @@ import com.google.common.collect.Lists;
  * Instead input is the source path of the POLoad.
  */
 @SuppressWarnings({ "serial" })
-public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
+public class LoadConverter implements RDDConverter<Tuple, List<Tuple>,Tuple, POLoad> {
     private static Log LOG = LogFactory.getLog(LoadConverter.class);
 
     private PigContext pigContext;
@@ -76,7 +77,9 @@ public class LoadConverter implements RDDConverter<Tuple, Tuple, POLoad> {
     }
 
     @Override
-    public RDD<Tuple> convert(List<RDD<Tuple>> predecessorRdds, POLoad op)
+    public RDD<Tuple> convert(List<RDD<Tuple>> predecessorRdds,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+                              POLoad op)
             throws IOException {
 
         // This configuration will be "broadcasted" by Spark, one to every

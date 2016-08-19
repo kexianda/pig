@@ -69,28 +69,8 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.CollectedGroupConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.CounterConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.DistinctConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.FRJoinConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.FilterConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.ForEachConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.GlobalRearrangeConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.LimitConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.LoadConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.LocalRearrangeConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeCogroupConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeJoinConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.PackageConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.RankConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.ReduceByConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.SkewedJoinConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.SortConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.SplitConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.StoreConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.StreamConverter;
-import org.apache.pig.backend.hadoop.executionengine.spark.converter.UnionConverter;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.*;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POBroadcast;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POReduceBySpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.optimizer.AccumulatorOptimizer;
@@ -211,6 +191,7 @@ public class SparkLauncher extends Launcher {
         convertMap.put(POMergeCogroup.class, new MergeCogroupConverter());
         convertMap.put(POReduceBySpark.class, new ReduceByConverter());
         convertMap.put(POPreCombinerLocalRearrange.class, new LocalRearrangeConverter());
+        convertMap.put(POBroadcast.class, new BroadcastConverter(sparkContext));
 
         uploadUDFJars(sparkplan);
         new JobGraphBuilder(sparkplan, convertMap, sparkStats, sparkContext, jobMetricsListener, jobGroupID, jobConf).visit();

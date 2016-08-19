@@ -22,7 +22,9 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Product2;
 import scala.Tuple2;
 import scala.collection.JavaConversions;
@@ -46,7 +48,7 @@ import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({ "serial" })
 public class GlobalRearrangeConverter implements
-        RDDConverter<Tuple, Tuple, POGlobalRearrangeSpark> {
+        RDDConverter<Tuple, List<Tuple>,Tuple, POGlobalRearrangeSpark> {
     private static final Log LOG = LogFactory
             .getLog(GlobalRearrangeConverter.class);
 
@@ -54,6 +56,7 @@ public class GlobalRearrangeConverter implements
  
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
                               POGlobalRearrangeSpark op) throws IOException {
         SparkUtil.assertPredecessorSizeGreaterThan(predecessors,
                 op, 0);

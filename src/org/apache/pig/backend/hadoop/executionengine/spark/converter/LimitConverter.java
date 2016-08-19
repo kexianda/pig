@@ -20,6 +20,7 @@ package org.apache.pig.backend.hadoop.executionengine.spark.converter;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.Result;
@@ -27,13 +28,16 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.data.Tuple;
 import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
 @SuppressWarnings({ "serial" })
-public class LimitConverter implements RDDConverter<Tuple, Tuple, POLimit> {
+public class LimitConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, POLimit> {
 
     @Override
-    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, POLimit poLimit)
+    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+                              Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+                              POLimit poLimit)
             throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, poLimit, 1);
         RDD<Tuple> rdd = predecessors.get(0);

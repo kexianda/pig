@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.spark.broadcast.Broadcast;
 import scala.Tuple2;
 
 import org.apache.commons.logging.Log;
@@ -38,12 +39,14 @@ import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.rdd.RDD;
 
-public class RankConverter implements RDDConverter<Tuple, Tuple, PORank> {
+public class RankConverter implements RDDConverter<Tuple, List<Tuple>, Tuple, PORank> {
 
 	private static final Log LOG = LogFactory.getLog(RankConverter.class);
 	
 	@Override
-	public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, PORank poRank)
+	public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
+							  Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+							  PORank poRank)
 			throws IOException {
 		SparkUtil.assertPredecessorSize(predecessors, poRank, 1);
         RDD<Tuple> rdd = predecessors.get(0);
