@@ -39,7 +39,7 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
 
         //Broadcast<Tuple[]> broadcastedTuples = sc.broadcast(smallRDD.collect(), SparkUtil.getManifest(Tuple[].class));
 
-        //TODO:  Map ?
+
 
         //Mockup
         TupleFactory tf = TupleFactory.getInstance();
@@ -61,7 +61,7 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
             reducerMap.put(t2, p2);
 
             Tuple t = tf.newTuple(2);
-            t.set(0, 7);  //number
+            t.set(0, 6);  //number
             t.set(1, reducerMap);
             mockupDist.add(t);
         } catch (Exception e){
