@@ -19,60 +19,32 @@ package org.apache.pig.backend.hadoop.executionengine.spark.plan;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.pig.CollectableLoadFunc;
-import org.apache.pig.FuncSpec;
-import org.apache.pig.IndexableLoadFunc;
-import org.apache.pig.LoadFunc;
-import org.apache.pig.OrderedLoadFunc;
-import org.apache.pig.PigException;
+import org.apache.pig.*;
 import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MergeJoinIndexer;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.ScalarPhyFinder;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.UDFFinder;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.POStatus;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.ConstantExpression;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.POProject;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.POUserFunc;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCollectedGroup;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCross;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PODistinct;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFilter;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POForEach;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POGlobalRearrange;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLimit;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLoad;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLocalRearrange;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeCogroup;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PONative;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPackage;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSort;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.Packager;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCounter;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PORank;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.*;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.NativeSparkOperator;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POBroadcast;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
+import org.apache.pig.data.DataType;
 import org.apache.pig.impl.PigContext;
+import org.apache.pig.impl.builtin.GetMemNumRows;
+import org.apache.pig.impl.builtin.PartitionSkewedKeys;
 import org.apache.pig.impl.io.FileLocalizer;
 import org.apache.pig.impl.io.FileSpec;
 import org.apache.pig.impl.plan.DepthFirstWalker;
@@ -82,6 +54,7 @@ import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.OperatorPlan;
 import org.apache.pig.impl.plan.PlanException;
 import org.apache.pig.impl.plan.VisitorException;
+import org.apache.pig.impl.util.MultiMap;
 import org.apache.pig.impl.util.ObjectSerializer;
 import org.apache.pig.impl.util.Utils;
 
@@ -93,6 +66,7 @@ public class SparkCompiler extends PhyPlanVisitor {
     private static final Log LOG = LogFactory.getLog(SparkCompiler.class);
 
     private PigContext pigContext;
+    private Properties pigProperties;
 
 	// The physicalPlan that is being compiled
 	private PhysicalPlan physicalPlan;
@@ -119,6 +93,7 @@ public class SparkCompiler extends PhyPlanVisitor {
 						physicalPlan));
 		this.physicalPlan = physicalPlan;
 		this.pigContext = pigContext;
+		this.pigProperties = pigContext.getProperties();
 		this.sparkPlan = new SparkOperPlan();
 		this.phyToSparkOpMap = new HashMap<PhysicalOperator, SparkOperator>();
 		this.udfFinder = new UDFFinder();
@@ -679,14 +654,114 @@ public class SparkCompiler extends PhyPlanVisitor {
 
             SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
             sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
-            PhysicalPlan samplePhyPlan = sampleSparkOp.physicalPlan;
+            //PhysicalPlan samplePhyPlan = sampleSparkOp.physicalPlan;
+
+
+
+            //--------------------------------
+            // 1. sampling
+            int sampleRate = POPoissonSample.DEFAULT_SAMPLE_RATE;
+            if (pigProperties.containsKey(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE)) {
+                sampleRate = Integer.valueOf(pigProperties.getProperty(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE));
+            }
+            float heapPerc =  PartitionSkewedKeys.DEFAULT_PERCENT_MEMUSAGE;
+            if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEMUSAGE)) {
+                heapPerc = Float.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEMUSAGE));
+            }
+            long totalMemory = -1;
+            if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM)) {
+                totalMemory = Long.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM));
+            }
+            POPoissonSample poSample = new POPoissonSample(new OperatorKey(scope,nig.getNextNodeId(scope)),
+                    -1, sampleRate, heapPerc, totalMemory);
+            sampleSparkOp.physicalPlan.addAsLeaf(poSample);
+
+
+            sampleSparkOp.markSampler();
+            //-------------------------------------------
+
+            MultiMap<PhysicalOperator, PhysicalPlan> joinPlans = op.getJoinPlans();
+            List<PhysicalOperator> l = physicalPlan.getPredecessors(op);
+            List<PhysicalPlan> groups = joinPlans.get(l.get(0));
+            List<Boolean> ascCol = new ArrayList<Boolean>();
+            for(int i=0; i<groups.size(); i++) {
+                ascCol.add(false);
+            }
+
+            //---------------- set up Key with MemNumRows ForEach ----------------
+            // ---- input:  sampling: (key, value) tuple
+            // ---- output:( Key, mem, rowNum) ---
+            // Set up transform plan to get keys and memory size of input tuples.
+            // It first adds all the plans to get key columns.
+            List<PhysicalPlan> transformPlans = new ArrayList<PhysicalPlan>();
+            transformPlans.addAll(groups);
+
+            // then it adds a column for memory size
+            POProject prjStar = new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            prjStar.setResultType(DataType.TUPLE);
+            prjStar.setStar(true);
+
+            List<PhysicalOperator> ufInps = new ArrayList<PhysicalOperator>();
+            ufInps.add(prjStar);
+
+            PhysicalPlan ep = new PhysicalPlan();
+            POUserFunc uf = new POUserFunc(new OperatorKey(scope,nig.getNextNodeId(scope)), -1, ufInps,
+                    new FuncSpec(GetMemNumRows.class.getName(), (String[])null));
+            uf.setResultType(DataType.TUPLE);
+            ep.add(uf);
+            ep.add(prjStar);
+            ep.connect(prjStar, uf);
+
+            transformPlans.add(ep);
+            List<Boolean> flat1 = new ArrayList<Boolean>();
+            List<PhysicalPlan> eps1 = new ArrayList<PhysicalPlan>();
+
+            for (int i=0; i<transformPlans.size(); i++) {
+                eps1.add(transformPlans.get(i));
+                flat1.add(true);
+            }
+
+            // This foreach will pick the sort key columns from the POPoissonSample output
+            POForEach memNumRowForEach = new POForEach(new OperatorKey(scope,nig.getNextNodeId(scope)),
+                    -1, eps1, flat1);
+            sampleSparkOp.physicalPlan.addAsLeaf(memNumRowForEach);
+
+            // ----- POLocalRearrange -----
+            // need "all" const expression or not?
+            // Now set up a POLocalRearrange which has "all" as the key and the output of the
+            // foreach will be the "value" out of POLocalRearrange
+            PhysicalPlan cep = new PhysicalPlan();
+            ConstantExpression ce = new ConstantExpression(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            ce.setValue("all");
+            ce.setResultType(DataType.CHARARRAY);
+            cep.add(ce);
+
+            List<PhysicalPlan> constExprPlanList = new ArrayList<PhysicalPlan>();
+            constExprPlanList.add(cep);
+            POLocalRearrange lr = new POLocalRearrange(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            try {
+                lr.setIndex(0);
+            } catch (ExecException e) {
+                int errCode = 2058;
+                String msg = "Unable to set index on newly created POLocalRearrange.";
+                throw new PlanException(msg, errCode, PigException.BUG, e);
+            }
+            lr.setKeyType(DataType.CHARARRAY);
+            lr.setPlans(constExprPlanList);
+            lr.setResultType(DataType.TUPLE);
+            sampleSparkOp.physicalPlan.addAsLeaf(lr);
+
+            // ----- POPackage -----
+
+
+            //---------------------------------
             POBroadcast poBroadcast = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
-            samplePhyPlan.addAsLeaf(poBroadcast);
-			sparkPlan.add(sampleSparkOp);
+            sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
+            sparkPlan.add(sampleSparkOp);
 
             addToPlan(op);
-			curSparkOp.setSkewedJoinPartitionFile(poBroadcast.getOperatorKey().toString());
-			sparkPlan.connect(sampleSparkOp, curSparkOp);
+            curSparkOp.setSkewedJoinPartitionFile(poBroadcast.getOperatorKey().toString());
+            sparkPlan.connect(sampleSparkOp, curSparkOp);
 
             phyToSparkOpMap.put(op, curSparkOp);
         } catch (Exception e) {

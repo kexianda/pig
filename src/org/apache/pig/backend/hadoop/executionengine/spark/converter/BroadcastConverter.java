@@ -7,6 +7,7 @@ import org.apache.pig.data.DataByteArray;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.data.TupleFactory;
 import org.apache.pig.impl.util.Pair;
+import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
@@ -34,10 +35,11 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
         RDD<Tuple> smallRDD = predecessors.get(0);
 
-        //JavaSparkContext sparkContext = new JavaSparkContext("","");
-        //Broadcast<Tuple[]> broadcastedTuples  = sparkContext.broadcast(smallRDD.collect());
+        JavaRDD<Tuple> javaRDD = new JavaRDD<>(smallRDD, SparkUtil.getManifest(Tuple.class));
 
-        //Broadcast<Tuple[]> broadcastedTuples = sc.broadcast(smallRDD.collect(), SparkUtil.getManifest(Tuple[].class));
+        Broadcast<List<Tuple>> broadcastedRDD  = sc.broadcast(javaRDD.collect());
+
+        List<Tuple> val = broadcastedRDD.value();
 
 
 
