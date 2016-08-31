@@ -197,6 +197,9 @@ public class POPoissonSampleSpark extends PhysicalOperator {
                 ((avgTupleMemSz*numRowsSampled) + t.getMemorySize())/(numRowsSampled + 1);
         skipInterval = memToSkipPerSample/avgTupleMemSz;
 
+        // Xianda: for debugging
+        skipInterval = 0;
+
         // skipping fewer number of rows the first few times, to reduce the
         // probability of first tuples size (if much smaller than rest)
         // resulting in very few samples being sampled. Sampling a little extra

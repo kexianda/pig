@@ -56,6 +56,7 @@ import org.apache.pig.impl.plan.PlanException;
 import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.impl.util.MultiMap;
 import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.impl.util.Pair;
 import org.apache.pig.impl.util.Utils;
 
 /**
@@ -704,15 +705,15 @@ public class SparkCompiler extends PhyPlanVisitor {
             List<PhysicalOperator> ufInps = new ArrayList<PhysicalOperator>();
             ufInps.add(prjStar);
 
-            PhysicalPlan ep = new PhysicalPlan();
+            PhysicalPlan memNumRowPlan = new PhysicalPlan();
             POUserFunc uf = new POUserFunc(new OperatorKey(scope,nig.getNextNodeId(scope)), -1, ufInps,
                     new FuncSpec(GetMemNumRows.class.getName(), (String[])null));
             uf.setResultType(DataType.TUPLE);
-            ep.add(uf);
-            ep.add(prjStar);
-            ep.connect(prjStar, uf);
+            memNumRowPlan.add(uf);
+            memNumRowPlan.add(prjStar);
+            memNumRowPlan.connect(prjStar, uf);
 
-            transformPlans.add(ep);
+            transformPlans.add(memNumRowPlan);
             List<Boolean> flat1 = new ArrayList<Boolean>();
             List<PhysicalPlan> eps1 = new ArrayList<PhysicalPlan>();
 
@@ -737,7 +738,7 @@ public class SparkCompiler extends PhyPlanVisitor {
             cep.add(ce);
 
             List<PhysicalPlan> lrPlans = new ArrayList<PhysicalPlan>();
-            lrPlans.addAll(groups);
+            //lrPlans.addAll(groups);
             lrPlans.add(cep);
             POLocalRearrange lr = new POLocalRearrange(new OperatorKey(scope,nig.getNextNodeId(scope)));
             try {
@@ -749,13 +750,117 @@ public class SparkCompiler extends PhyPlanVisitor {
             }
             lr.setKeyType(DataType.CHARARRAY);
             lr.setPlans(lrPlans);
+			List<PhysicalPlan> secondKeyPlans = new ArrayList<PhysicalPlan>();
             lr.setResultType(DataType.TUPLE);
+			secondKeyPlans.addAll(groups);
+			lr.setSecondaryPlans(secondKeyPlans);
             sampleSparkOp.physicalPlan.addAsLeaf(lr);
 
             // ----- POPackage -----
+            POPackage pkg = new POPackage(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            Packager pkgr = new Packager();
+            pkg.setPkgr(pkgr);
+            pkgr.setKeyType(DataType.CHARARRAY);
+            pkg.setNumInps(1);
+            boolean[] inner = {false};
+            pkgr.setInner(inner);
+            sampleSparkOp.physicalPlan.addAsLeaf(pkg);
+            //---------------------------------
 
+
+            POSort sort = new POSort(op.getOperatorKey(), op.getRequestedParallelism(), null, groups, ascCol, null);
+			//---------sortBagForeach----------
+			// Lets start building the plan which will have the sort
+			// for the foreach
+			PhysicalPlan sortBagPlan = new PhysicalPlan();
+			// Top level project which just projects the tuple which is coming
+			// from the foreach after the package
+			POProject bagPrj = new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
+			bagPrj.setColumn(1);
+			bagPrj.setResultType(DataType.BAG);
+			bagPrj.setOverloaded(true);
+			sortBagPlan.add(bagPrj);
+
+            //---
+            // the projections which will form sort plans
+            List<PhysicalPlan> nesSortPlanLst = new ArrayList<PhysicalPlan>();
+            Pair<POProject, Byte>[] sortProjs = null;
+            try{
+                sortProjs = getSortCols(sort.getSortPlans());
+            }catch(Exception e) {
+                throw new RuntimeException(e);
+            }
+            // Set up the projections of the key columns
+            if (sortProjs == null) {
+                PhysicalPlan ep = new PhysicalPlan();
+                POProject prj = new POProject(new OperatorKey(scope,
+                        nig.getNextNodeId(scope)));
+                prj.setStar(true);
+                prj.setOverloaded(false);
+                prj.setResultType(DataType.TUPLE);
+                ep.add(prj);
+                nesSortPlanLst.add(ep);
+            } else {
+                for (int i=0; i<sortProjs.length; i++) {
+                    POProject prj =
+                            new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
+
+                    prj.setResultType(sortProjs[i].second);
+                    if(sortProjs[i].first != null && sortProjs[i].first.isProjectToEnd()){
+                        if(i != sortProjs.length -1){
+                            //project to end has to be the last sort column
+                            throw new AssertionError("Project-range to end (x..)" +
+                                    " is supported in order-by only as last sort column");
+                        }
+                        prj.setProjectToEnd(i);
+                        break;
+                    }
+                    else{
+                        prj.setColumn(i);
+                    }
+                    prj.setOverloaded(false);
+
+                    PhysicalPlan ep = new PhysicalPlan();
+                    ep.add(prj);
+                    nesSortPlanLst.add(ep);
+                }
+            }
+            sort.setSortPlans(nesSortPlanLst);
+            sort.setResultType(DataType.BAG);
+            sortBagPlan.add(sort);
+            sortBagPlan.add(bagPrj);
+            sortBagPlan.connect(bagPrj, sort);
+
+            int rp = op.getRequestedParallelism();
+            // The plan which will have a constant representing the
+            // degree of parallelism for the final order by map-reduce job
+            // this will either come from a "order by parallel x" in the script
+            // or will be the default number of reducers for the cluster if
+            // "parallel x" is not used in the script
+            PhysicalPlan rpep = new PhysicalPlan();
+            ConstantExpression rpce = new ConstantExpression(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            rpce.setRequestedParallelism(rp);
+            // We temporarily set it to rp and will adjust it at runtime, because the final degree of parallelism
+            // is unknown until we are ready to submit it. See PIG-2779.
+            rpce.setValue(rp);
+            //---
+
+            rpce.setResultType(DataType.INTEGER);
+            rpep.add(rpce);
+
+            List<PhysicalPlan> genEps = new ArrayList<PhysicalPlan>();
+            genEps.add(rpep);
+            genEps.add(sortBagPlan);
+
+            List<Boolean> flattened2 = new ArrayList<Boolean>();
+            flattened2.add(false);
+            flattened2.add(false);
+
+            POForEach nfe2 = new POForEach(new OperatorKey(scope,nig.getNextNodeId(scope)),-1, genEps, flattened2);
+            sampleSparkOp.physicalPlan.addAsLeaf(nfe2);
 
             //---------------------------------
+
             POBroadcast poBroadcast = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
             sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
             sparkPlan.add(sampleSparkOp);
@@ -1100,5 +1205,29 @@ public class SparkCompiler extends PhyPlanVisitor {
     private FileSpec getTempFileSpec() throws IOException {
         return new FileSpec(FileLocalizer.getTemporaryPath(pigContext).toString(),
                 new FuncSpec(Utils.getTmpFileCompressorName(pigContext)));
+    }
+
+    private Pair<POProject,Byte> [] getSortCols(List<PhysicalPlan> plans) throws PlanException, ExecException {
+        if(plans!=null){
+            @SuppressWarnings("unchecked")
+            Pair<POProject,Byte>[] ret = new Pair[plans.size()];
+            int i=-1;
+            for (PhysicalPlan plan : plans) {
+                PhysicalOperator op = plan.getLeaves().get(0);
+                POProject proj;
+                if (op instanceof POProject) {
+                    if (((POProject)op).isStar()) return null;
+                    proj = (POProject)op;
+                } else {
+                    proj = null;
+                }
+                byte type = op.getResultType();
+                ret[++i] = new Pair<POProject, Byte>(proj, type);
+            }
+            return ret;
+        }
+        int errCode = 2026;
+        String msg = "No expression plan found in POSort.";
+        throw new PlanException(msg, errCode, PigException.BUG);
     }
 }
