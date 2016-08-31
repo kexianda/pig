@@ -173,7 +173,7 @@ public class SparkLauncher extends Launcher {
         convertMap.put(POReduceBySpark.class, new ReduceByConverter());
         convertMap.put(POPreCombinerLocalRearrange.class, new LocalRearrangeConverter());
         convertMap.put(POBroadcast.class, new BroadcastConverter(sparkContext));
-        convertMap.put(POPoissonSample.class, new PoissonSampleConverter());
+        convertMap.put(POPoissonSampleSpark.class, new PoissonSampleConverter());
 
         uploadUDFJars(sparkplan);
         new JobGraphBuilder(sparkplan, convertMap, sparkStats, sparkContext, jobMetricsListener, jobGroupID, jobConf).visit();

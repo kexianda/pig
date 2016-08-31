@@ -4,6 +4,7 @@ import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.Result;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLimit;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSample;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSampleSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.data.Tuple;
 import org.apache.spark.api.java.function.FlatMapFunction;
@@ -18,11 +19,12 @@ import java.util.Map;
 /**
  * Created by xiandake on 8/30/16.
  */
-public class PoissonSampleConverter implements RDDConverter<Tuple, List<Tuple>,Tuple, POPoissonSample> {
+public class PoissonSampleConverter implements RDDConverter<Tuple, List<Tuple>,Tuple, POPoissonSampleSpark> {
 
 
     @Override
-    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, Map<String, Broadcast<List<Tuple>>> broadcastedVars, POPoissonSample po) throws IOException {
+    public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, Map<String, Broadcast<List<Tuple>>> broadcastedVars,
+                              POPoissonSampleSpark po) throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, po, 1);
         RDD<Tuple> rdd = predecessors.get(0);
         PoissionSampleFunction poissionSampleFunction = new PoissionSampleFunction(po);
@@ -31,9 +33,9 @@ public class PoissonSampleConverter implements RDDConverter<Tuple, List<Tuple>,T
 
     private static class PoissionSampleFunction implements FlatMapFunction<Iterator<Tuple>, Tuple> {
 
-        private final POPoissonSample po;
+        private final POPoissonSampleSpark po;
 
-        public PoissionSampleFunction(POPoissonSample po) {
+        public PoissionSampleFunction(POPoissonSampleSpark po) {
             this.po = po;
         }
 

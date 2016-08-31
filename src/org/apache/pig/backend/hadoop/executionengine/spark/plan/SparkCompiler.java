@@ -660,7 +660,7 @@ public class SparkCompiler extends PhyPlanVisitor {
 
             //--------------------------------
             // 1. sampling
-            int sampleRate = POPoissonSample.DEFAULT_SAMPLE_RATE;
+            int sampleRate = POPoissonSampleSpark.DEFAULT_SAMPLE_RATE;
             if (pigProperties.containsKey(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE)) {
                 sampleRate = Integer.valueOf(pigProperties.getProperty(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE));
             }
@@ -672,7 +672,7 @@ public class SparkCompiler extends PhyPlanVisitor {
             if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM)) {
                 totalMemory = Long.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM));
             }
-            POPoissonSample poSample = new POPoissonSample(new OperatorKey(scope,nig.getNextNodeId(scope)),
+			POPoissonSampleSpark poSample = new POPoissonSampleSpark(new OperatorKey(scope,nig.getNextNodeId(scope)),
                     -1, sampleRate, heapPerc, totalMemory);
             sampleSparkOp.physicalPlan.addAsLeaf(poSample);
 
@@ -736,8 +736,9 @@ public class SparkCompiler extends PhyPlanVisitor {
             ce.setResultType(DataType.CHARARRAY);
             cep.add(ce);
 
-            List<PhysicalPlan> constExprPlanList = new ArrayList<PhysicalPlan>();
-            constExprPlanList.add(cep);
+            List<PhysicalPlan> lrPlans = new ArrayList<PhysicalPlan>();
+            lrPlans.addAll(groups);
+            lrPlans.add(cep);
             POLocalRearrange lr = new POLocalRearrange(new OperatorKey(scope,nig.getNextNodeId(scope)));
             try {
                 lr.setIndex(0);
@@ -747,7 +748,7 @@ public class SparkCompiler extends PhyPlanVisitor {
                 throw new PlanException(msg, errCode, PigException.BUG, e);
             }
             lr.setKeyType(DataType.CHARARRAY);
-            lr.setPlans(constExprPlanList);
+            lr.setPlans(lrPlans);
             lr.setResultType(DataType.TUPLE);
             sampleSparkOp.physicalPlan.addAsLeaf(lr);
 
