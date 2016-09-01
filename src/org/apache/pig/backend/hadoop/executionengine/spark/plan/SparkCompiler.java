@@ -841,7 +841,9 @@ public class SparkCompiler extends PhyPlanVisitor {
             // "parallel x" is not used in the script
             PhysicalPlan rpep = new PhysicalPlan();
             ConstantExpression rpce = new ConstantExpression(new OperatorKey(scope,nig.getNextNodeId(scope)));
+
             rpce.setRequestedParallelism(rp); // for ParallelConstantVisitor
+
             // We temporarily set it to rp and will adjust it at runtime, because the final degree of parallelism
             // is unknown until we are ready to submit it. See PIG-2779.
             rpce.setValue(rp);
@@ -871,10 +873,10 @@ public class SparkCompiler extends PhyPlanVisitor {
             sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
             sparkPlan.add(sampleSparkOp);
 
-			// -------------------------
-			sampleSparkOp.markSampler();
-			//sampleSparkOp.requestedParallelism = 1;
-			// -----------------------
+            // -------------------------
+            sampleSparkOp.markSampler();
+            //sampleSparkOp.requestedParallelism = 1;
+            // -----------------------
 
             addToPlan(op);
             curSparkOp.setSkewedJoinPartitionFile(poBroadcast.getOperatorKey().toString());

@@ -39,11 +39,10 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfigurat
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PhyPlanSetter;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.UDFFinishVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.ConstantExpression;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
-import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.*;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.SkewedJoinConverter;
@@ -55,6 +54,7 @@ import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperator;
 import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.io.FileSpec;
 import org.apache.pig.impl.plan.DependencyOrderWalker;
+import org.apache.pig.impl.plan.DepthFirstWalker;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.tools.pigstats.spark.SparkPigStats;
@@ -230,7 +230,6 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
             }
         }
 
-        //sparkOperator.isCogroup()
         if (physicalOperator instanceof POBroadcast) {
             //POBroadcast poBroadcast = (POBroadcast) physicalOperator;
             //poBroadcast.setBroadcastedVarsMap(bcVarsMap);
@@ -257,15 +256,17 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                         "Pig on Spark does not support Physical Operator: " + physicalOperator);
             }
 
-            if (sparkOperator.isSkewedJoin() && converter instanceof SkewedJoinConverter) {
-                SkewedJoinConverter skewedJoinConverter = (SkewedJoinConverter) converter;
-                skewedJoinConverter.setSkewedJoinPartitionFile(sparkOperator.getSkewedJoinPartitionFile());
-            }
-
             LOG.info("Converting operator "
                     + physicalOperator.getClass().getSimpleName() + " "
                     + physicalOperator);
             List<RDD<Tuple>> allPredRDDs = sortPredecessorRDDs(operatorKeysOfAllPreds);
+
+            if (sparkOperator.isSkewedJoin() && converter instanceof SkewedJoinConverter) {
+                SkewedJoinConverter skewedJoinConverter = (SkewedJoinConverter) converter;
+                skewedJoinConverter.setSkewedJoinPartitionFile(sparkOperator.getSkewedJoinPartitionFile());
+            }
+            adjustRuntimeParallelismForSkewedJoin(physicalOperator, sparkOperator, allPredRDDs);
+
             nextRDD = converter.convert(allPredRDDs, bcVarsMap, physicalOperator);
 
             if (nextRDD == null) {
@@ -331,5 +332,73 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
         }
         seenJobIDs.addAll(unseenJobIDs);
         return unseenJobIDs;
+    }
+
+    /**
+     * if the parallelism of skewed join is NOT specified by user in the script
+     * set a default parallelism
+     *
+     * @param physicalOperator
+     * @param sparkOperator
+     * @param allPredRDDs
+     * @throws VisitorException
+     */
+    private void adjustRuntimeParallelismForSkewedJoin(PhysicalOperator physicalOperator,
+                                                       SparkOperator sparkOperator,
+                                                       List<RDD<Tuple>> allPredRDDs ) throws VisitorException {
+        // We need to calculate the final number of reducers of the next job (skew-join)
+        // adjust parallelism of ConstantExpression
+        if (sparkOperator.isSampler() && sparkPlan.getSuccessors(sparkOperator) != null
+                && physicalOperator instanceof POPoissonSampleSpark) {
+            // set the runtime #reducer of the next job as the #partition
+
+            int defaultParallelism;
+            if (sparkContext.getConf().contains("spark.default.parallelism")) {
+                defaultParallelism = sparkContext.defaultParallelism();
+            } else {
+                // find out max partitions number
+                int maxPartitions = -1;
+                for (int i = 0; i < allPredRDDs.size(); i++) {
+                    if (allPredRDDs.get(i).partitions().length > maxPartitions) {
+                        maxPartitions = allPredRDDs.get(i).partitions().length;
+                    }
+                }
+                defaultParallelism = maxPartitions;
+            }
+
+            ParallelConstantVisitor visitor =
+                    new ParallelConstantVisitor(sparkOperator.physicalPlan, defaultParallelism);
+            visitor.visit();
+        }
+    }
+
+    private static class ParallelConstantVisitor extends PhyPlanVisitor {
+
+        private int rp;
+
+        private boolean replaced = false;
+
+        public ParallelConstantVisitor(PhysicalPlan plan, int rp) {
+            super(plan, new DepthFirstWalker<PhysicalOperator, PhysicalPlan>(
+                    plan));
+            this.rp = rp;
+        }
+
+        @Override
+        public void visitConstant(ConstantExpression cnst) throws VisitorException {
+            if (cnst.getRequestedParallelism() == -1) {
+                Object obj = cnst.getValue();
+                if (obj instanceof Integer) {
+                    if (replaced) {
+                        // sample job should have only one ConstantExpression
+                        throw new VisitorException("Invalid reduce plan: more " +
+                                "than one ConstantExpression found in sampling job");
+                    }
+                    cnst.setValue(rp);
+                    cnst.setRequestedParallelism(rp);
+                    replaced = true;
+                }
+            }
+        }
     }
 }
