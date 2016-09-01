@@ -44,10 +44,7 @@ import org.apache.pig.impl.plan.PlanException;
 import org.apache.pig.impl.util.MultiMap;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.api.java.function.PairFlatMapFunction;
-import org.apache.spark.api.java.function.PairFunction;
 import org.apache.spark.api.java.function.FlatMapFunction;
-import org.apache.spark.api.java.function.Function;
 import org.apache.spark.rdd.RDD;
 
 public class SkewedJoinConverter implements
@@ -83,23 +80,33 @@ public class SkewedJoinConverter implements
         RDD<Tuple> rdd1 = predecessors.get(0);
         RDD<Tuple> rdd2 = predecessors.get(1);
 
-        Broadcast<List<Tuple>> distTuples = broadcastedVars.get(skewedJoinPartitionFile);
+        //poSkewedJoin.getRequestedParallelism();
 
-        ExtractKeyFunctionWithPartitionId extraKeyWithPid = new ExtractKeyFunctionWithPartitionId(this, 0, distTuples);
+        Broadcast<List<Tuple>> keyDist = broadcastedVars.get(skewedJoinPartitionFile);
+
+        // parallelism, if not defined in distKey, get default parallelism
+        int parallelism = poSkewedJoin.getRequestedParallelism();
+        if (keyDist != null && keyDist.value()!=null) {
+            try {
+                Tuple distTuple = keyDist.value().get(0);
+                parallelism = (int) distTuple.get(0);
+            } catch (ExecException e) {
+            }
+        }
+        if (parallelism < 0) {
+            if (rdd1.context().conf().contains("spark.default.parallelism")) {
+                parallelism = rdd1.context().defaultParallelism();
+            } else {
+                parallelism = rdd1.getPartitions().length; // getNumPartitions
+            }
+        }
+
+        ExtractKeyFunctionWithPartitionId extraKeyWithPid = new ExtractKeyFunctionWithPartitionId(this, 0, keyDist);
         RDD<Tuple2<IndexedKey, Tuple>> skewPid_Pair = rdd1.map(extraKeyWithPid, SparkUtil.<IndexedKey, Tuple>getTuple2Manifest());
         JavaPairRDD<IndexedKey, Tuple> skewPid_Pair_javaRDD = new JavaPairRDD<IndexedKey, Tuple>(
                 skewPid_Pair, SparkUtil.getManifest(IndexedKey.class),
                 SparkUtil.getManifest(Tuple.class));
 
-        // ------------------------------------------------------------------------------
-        // make (key, value) pairs, key has type IndexedKey, value has type Tuple
-        //RDD<Tuple2<IndexedKey, Tuple>> rdd1Pair = rdd1.map(new ExtractKeyFunction(
-        //        this, 0), SparkUtil.<IndexedKey, Tuple>getTuple2Manifest());
-
-//        // join fn is present in JavaPairRDD class ..
-//        JavaPairRDD<IndexedKey, Tuple> rdd1Pair_javaRDD = new JavaPairRDD<IndexedKey, Tuple>(
-//                rdd1Pair, SparkUtil.getManifest(IndexedKey.class),
-//                SparkUtil.getManifest(Tuple.class));
 
         RDD<Tuple2<IndexedKey, Tuple>> rdd2Pair = rdd2.map(new ExtractKeyFunction(
                 this, 1), SparkUtil.<IndexedKey, Tuple>getTuple2Manifest());
@@ -110,22 +117,11 @@ public class SkewedJoinConverter implements
 
         //rdd1Pair_javaRDD.map(new AppendPartitionIdFun(distTuples));
         JavaPairRDD<IndexedKey, Tuple> streamPid_Pair_javaRDD = new JavaPairRDD<IndexedKey, Tuple>(
-                rdd2Pair_javaRDD.flatMap(new StreamRDDFlatMapWithPartitionId(distTuples)).rdd(),
+                rdd2Pair_javaRDD.flatMap(new StreamRDDFlatMapWithPartitionId(keyDist)).rdd(),
                 SparkUtil.getManifest(IndexedKey.class),
                 SparkUtil.getManifest(Tuple.class));
 
 
-        // join() returns (key, (t1, t2)) where (key, t1) is in this and (key, t2) is in other
-//        JavaPairRDD<IndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = rdd1Pair_javaRDD
-//                .join(rdd2Pair_javaRDD);
-
-        int parallelism = -1;
-        try {
-            Tuple distTuple = distTuples.value().get(0);
-            parallelism = (int) distTuple.get(0);
-        } catch (ExecException e) {
-
-        }
         SkewedJoinPartitioner partitioner = new SkewedJoinPartitioner(parallelism);
         JavaPairRDD<IndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = skewPid_Pair_javaRDD
                 .join(streamPid_Pair_javaRDD, partitioner);
@@ -204,104 +200,6 @@ public class SkewedJoinConverter implements
 
     }
 
-//    private static class AppendPartitionIdFun implements PairFunction<Tuple2<IndexedKey, Tuple>, IndexedKey, Tuple> {
-//
-//        private final Broadcast<List<Tuple>> distTuples;
-//
-//        private boolean isInit = false;
-//        protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
-//        private Integer parallelism = -1;
-//
-//        //private Integer curPartitionId = -1;
-//        private Map<Tuple, Integer> currentIndexMap = Maps.newHashMap();
-//
-//        public AppendPartitionIdFun(Broadcast<List<Tuple>> distTuples) {
-//            this.distTuples = distTuples;
-//        }
-//
-//        @Override
-//        public Tuple2<IndexedKey, Tuple> call(Tuple2<IndexedKey, Tuple> t) throws Exception {
-//            try {
-//                TupleFactory tf = TupleFactory.getInstance();
-//
-//                Tuple oldKey = (Tuple) t._1.getKey();
-//                Tuple oldValue = t._2;
-//
-//                Tuple key = tf.newTuple(oldKey.size() + 1);
-//                int partitionId = getPartitionId(oldKey);
-//                key.set(0, partitionId);
-//                for(int i = 0; i < oldKey.size(); i++ ) {
-//                    key.set(i+1, oldKey.get(i));
-//                }
-//
-//                Tuple value = tf.newTuple(oldValue.size() + 1);
-//                value.set(0, partitionId);
-//                for(int i = 0; i < oldValue.size(); i++ ) {
-//                    value.set(i+1, oldValue.get(i));
-//                }
-//
-//                IndexedKey indexedKeyWithPartitionId = new IndexedKey((byte)0, key);
-//
-//                // make a (key, value) pair
-//                Tuple2<IndexedKey, Tuple> tuple_KeyValue = new Tuple2<IndexedKey, Tuple>(
-//                        indexedKeyWithPartitionId,
-//                        value);
-//
-//                return tuple_KeyValue;
-//
-//            }catch (Exception ex){
-//                System.out.print(ex);
-//                return null;
-//            }
-//        }
-//
-//        private Integer getPartitionId(Tuple key) {
-//            if (!isInit) {
-//                try {
-//                    Tuple distTuple = distTuples.value().get(0);
-//                    parallelism = (Integer) distTuple.get(0);
-//                    reducerMap = (Map<Tuple, Pair<Integer, Integer>>) distTuple.get(1);
-//                } catch (ExecException e) {
-//
-//                }
-//            }
-//            // for partition table, compute the index based on the sampler output
-//            Pair <Integer, Integer> indexes;
-//            Integer curIndex = -1;
-//            Tuple keyTuple = key;
-//
-//            // if the partition file is empty, use numPartitions
-//            //
-//            //
-//            //
-//            //
-//            // = (totalReducers > 0) ? totalReducers : numPartitions;
-//
-//            indexes = reducerMap.get(keyTuple);
-//            // if the reducerMap does not contain the key, do the default hash based partitioning
-//            if (indexes == null) {
-//                return (Math.abs(keyTuple.hashCode() % parallelism));
-//            }
-//
-//            if (currentIndexMap.containsKey(keyTuple)) {
-//                curIndex = currentIndexMap.get(keyTuple);
-//            }
-//
-//            if (curIndex >= (indexes.first + indexes.second) || curIndex == -1) {
-//                curIndex = indexes.first;
-//            } else {
-//                curIndex++;
-//            }
-//
-//            // set it in the map
-//            currentIndexMap.put(keyTuple, curIndex);
-//            return (curIndex % parallelism);
-//        }
-//
-//    }
-//
-
-
     private static class ExtractKeyFunctionWithPartitionId extends
             AbstractFunction1<Tuple, Tuple2<IndexedKey, Tuple>> implements
             Serializable {
@@ -311,7 +209,7 @@ public class SkewedJoinConverter implements
 
         private final Broadcast<List<Tuple>> distTuples;
 
-        private boolean isInit = false;
+        private boolean initialized = false;
         protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
         private Integer parallelism = -1;
 
@@ -342,16 +240,16 @@ public class SkewedJoinConverter implements
                 Byte index = (Byte)((Tuple) lrOut.result).get(0);
                 Object key = ((Tuple) lrOut.result).get(1);
 
-                Tuple oldKey = (Tuple)key;
+                Tuple origKey = (Tuple)key;
 
-                Tuple keyTuple = tf.newTuple(oldKey.size() + 1);
-                int partitionId = getPartitionId(oldKey);
+                Tuple keyTuple = tf.newTuple(origKey.size() + 1);
+                int partitionId = getPartitionId(origKey);
                 keyTuple.set(0, partitionId);
-                for(int i = 0; i < oldKey.size(); i++ ) {
-                    keyTuple.set(i+1, oldKey.get(i));
+                for(int i = 0; i < origKey.size(); i++ ) {
+                    keyTuple.set(i+1, origKey.get(i));
                 }
 
-                IndexedKey oldIndexedKey = new IndexedKey(index, key);
+                //IndexedKey oldIndexedKey = new IndexedKey(index, key);
                 IndexedKey indexedKeyWithPartitionId = new IndexedKey(index, keyTuple);
 
                 Tuple value =  tf.newTuple(tuple.size() + 1);
@@ -372,8 +270,8 @@ public class SkewedJoinConverter implements
             }
         }
 
-        private Integer getPartitionId(Tuple key) {
-            if (!isInit) {
+        private Integer getPartitionId(Tuple keyTuple) {
+            if (!initialized) {
                 try {
                     Tuple distTuple = distTuples.value().get(0);
                     parallelism = (Integer) distTuple.get(0);
@@ -381,24 +279,25 @@ public class SkewedJoinConverter implements
                 } catch (ExecException e) {
 
                 }
-                isInit = true;
+                initialized = true;
             }
+
+            //if no pig.keydist, so that the partitioner will do the default hash based partitioning
+            if (distTuples == null || reducerMap == null) {
+                //return (Math.abs(keyTuple.hashCode() % parallelism));
+                return -1;
+            }
+
             // for partition table, compute the index based on the sampler output
             Pair <Integer, Integer> indexes;
             Integer curIndex = -1;
-            Tuple keyTuple = key;
-
-            // if the partition file is empty, use numPartitions
-            //
-            //
-            //
-            //
-            // = (totalReducers > 0) ? totalReducers : numPartitions;
 
             indexes = reducerMap.get(keyTuple);
-            // if the reducerMap does not contain the key, do the default hash based partitioning
+
+            // if the reducerMap does not contain the key
             if (indexes == null) {
-                return (Math.abs(keyTuple.hashCode() % parallelism));
+                //return (Math.abs(keyTuple.hashCode() % parallelism));
+                return -1;
             }
 
             if (currentIndexMap.containsKey(keyTuple)) {
@@ -418,15 +317,16 @@ public class SkewedJoinConverter implements
 
     }
 
-    // POPartitionRearrange is not used,
+    // POPartitionRearrange is not used in spark mode now,
     // we copy the stream table's records and append a partition id here,
+    // see: https://wiki.apache.org/pig/PigSkewedJoinSpec
     // then use spark's flatMap
     // with user defined partitioner, we send the copied stream records to work nodes
     private static class StreamRDDFlatMapWithPartitionId implements FlatMapFunction < Tuple2<IndexedKey, Tuple>, Tuple2<IndexedKey, Tuple> > {
 
         private final Broadcast<List<Tuple>> distTuples;
 
-        private boolean isInit = false;
+        private boolean initialized = false;
         protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
         private Integer parallelism;
 
@@ -435,7 +335,7 @@ public class SkewedJoinConverter implements
         }
 
         public Iterable<Tuple2<IndexedKey, Tuple>> call(Tuple2<IndexedKey, Tuple> t) throws Exception {
-            if (!isInit) {
+            if (!initialized) {
                 try {
                     Tuple distTuple = distTuples.value().get(0);
 
@@ -444,7 +344,7 @@ public class SkewedJoinConverter implements
                 } catch (ExecException e) {
 
                 }
-                isInit = true;
+                initialized = true;
             }
 
             ArrayList<Tuple2<IndexedKey, Tuple>> l = new ArrayList();
@@ -543,60 +443,6 @@ public class SkewedJoinConverter implements
         }
     }
 
-//    private static class CopyStreamTableWithPartitionIdFlatMapFunction implements
-//            FlatMapFunction <Tuple, Tuple> {
-//        private final Broadcast<List<Tuple>> distTuples;
-//
-//        private boolean isInit = false;
-//        protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
-//        private Integer parallelism = 5;
-//
-//        public CopyStreamTableWithPartitionIdFlatMapFunction(Broadcast<List<Tuple>> distFile) {
-//            distTuples = distFile;
-//        }
-//
-//        @Override
-//        public Iterable<Tuple> call(Tuple key) throws Exception {
-//            if (!isInit) {
-//                try {
-//                    Tuple distTuple = distTuples.value().get(0);
-//
-//                    parallelism = (Integer) distTuple.get(0);
-//                    reducerMap = (Map<Tuple, Pair<Integer, Integer>>) distTuple.get(1);
-//                } catch (ExecException e) {
-//
-//                }
-//            }
-//
-//            ArrayList<Tuple> l = new ArrayList();
-//                TupleFactory tf = TupleFactory.getInstance();
-//
-//
-//                Pair<Integer, Integer> indexes = reducerMap.get(key);    // first -> min, second ->max
-//
-//                // For non skewed keys, we set the partition index to be -1
-//                if (indexes == null) {
-//                    indexes = new Pair<Integer, Integer>(-1, 0);
-//                }
-//
-//                for (Integer reducerIdx = indexes.first, cnt = 0; cnt <= indexes.second; reducerIdx++, cnt++) {
-//                    if (reducerIdx >= parallelism) {
-//                        reducerIdx = 0;
-//                    }
-//                    Tuple opTuple = tf.newTuple(key.size() + 1);
-//
-//                    // set the partition index
-//                    opTuple.set(0, reducerIdx.intValue());
-//                    for (int i = 0; i < key.size(); i++) {
-//                        opTuple.set(i + 1, key.get(i));
-//                    }
-//                    l.add(opTuple);
-//                }
-//
-//            return l;
-//        }
-//    }
-
     private static class SkewedJoinPartitioner extends Partitioner {
         private int numPartitions;
         public SkewedJoinPartitioner(int parallism) {
@@ -644,63 +490,18 @@ public class SkewedJoinConverter implements
 
     }
 
-//    private static class SkewedJoinPartitioner extends Partitioner {
-////        private Integer parallelism = 5;
-////        private boolean isInit = false;
-////
-////        Broadcast<List<Tuple>> distTuples;
-////        //transient ?
-////        //todo: reducermap comes from broadcast variable
-////        protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
-////
-////        transient private Map<Tuple, Integer> currentIndexMap = Maps.newHashMap();
-////
-////        public SkewedJoinPartitioner(Broadcast<List<Tuple>> bv){
-////            distTuples = bv;
-////        }
-////
-////        @Override
-////        public int numPartitions() {
-////            return parallelism;
-////        }
-//
-//        @Override
-//        public int getPartition(Object key) {
-////            if (!isInit){
-//////                try {
-//////                    Tuple t = distTuples.value().get(0);
-//////                    parallelism = (Integer) t.get(0);
-//////                    reducerMap = (Map<Tuple, Pair<Integer, Integer>>) t.get(1);
-//////                } catch (ExecException e) {
-////
-//////                }
-////            }
-//
-////            if (key instanceof IndexedKey){
-////                //my logic
-////                IndexedKey idxKey = (IndexedKey)key;
-////
-////                //todo: dispatch tuple to a partition
-////                //should be same logic as
-////                //idxKey.getKey()
-////
-////                //just for testing. passed!
-////                int code = idxKey.getKey().hashCode() % parallelism;
-////                if (code >= 0) {
-////                    return code;
-////                } else {
-////                    return code + parallelism;
-////                }
-////            } else {
-////                int code = key.hashCode() % parallelism;
-////                if (code >= 0) {
-////                    return code;
-////                } else {
-////                    return code + parallelism;
-////                }
-////            }
-//        }
-//
-//
-//    }
+    private int getParamlism(Broadcast<List<Tuple>> keyDist) {
+        //rdd1.context().conf().contains("spark.default.parallelism");
+        //rdd.context.defaultParallelism
+        //parallelism = rdd1.getPartitions().length; // getNumPartitions
+        int parallelism = -1;
+        try {
+            Tuple distTuple = keyDist.value().get(0);
+            parallelism = (int) distTuple.get(0);
+        } catch (ExecException e) {
+
+        }
+
+        return parallelism;
+    }
 }

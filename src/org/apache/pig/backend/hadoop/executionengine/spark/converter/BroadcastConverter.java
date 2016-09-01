@@ -33,7 +33,7 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
                               Map<String, Broadcast<List<Tuple>>> broadcastedVars,
                               POBroadcast physicalOperator) {
         SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
-        RDD<Tuple> smallRDD = predecessors.get(0);
+        RDD<Tuple> rdd = predecessors.get(0);
 
 
 
@@ -65,7 +65,7 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
 
         }
 
-        // smallRDD.toJavaRDD().collect()
+        // rdd.toJavaRDD().collect()
         Broadcast<List<Tuple>> broadcastedTuples = sc.broadcast(mockupDist);
 
         HashMap<String, Broadcast<List<Tuple>>> bcVarsMap = (HashMap<String, Broadcast<List<Tuple>>>) broadcastedVars;
@@ -75,11 +75,11 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
 
 
         // ----------------------
-        JavaRDD<Tuple> javaRDD = new JavaRDD<>(smallRDD, SparkUtil.getManifest(Tuple.class));
+        JavaRDD<Tuple> javaRDD = new JavaRDD<>(rdd, SparkUtil.getManifest(Tuple.class));
         Broadcast<List<Tuple>> broadcastedRDD  = sc.broadcast(javaRDD.collect());
         List<Tuple> val = broadcastedRDD.value();
 
-        return smallRDD;
+        return rdd;
     }
 
 }

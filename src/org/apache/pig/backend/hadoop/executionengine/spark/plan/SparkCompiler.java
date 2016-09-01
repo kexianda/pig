@@ -673,19 +673,18 @@ public class SparkCompiler extends PhyPlanVisitor {
             if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM)) {
                 totalMemory = Long.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM));
             }
-			POPoissonSampleSpark poSample = new POPoissonSampleSpark(new OperatorKey(scope,nig.getNextNodeId(scope)),
+            POPoissonSampleSpark poSample = new POPoissonSampleSpark(new OperatorKey(scope,nig.getNextNodeId(scope)),
                     -1, sampleRate, heapPerc, totalMemory);
             sampleSparkOp.physicalPlan.addAsLeaf(poSample);
 
 
-            sampleSparkOp.markSampler();
             //-------------------------------------------
 
             MultiMap<PhysicalOperator, PhysicalPlan> joinPlans = op.getJoinPlans();
             List<PhysicalOperator> l = physicalPlan.getPredecessors(op);
             List<PhysicalPlan> groups = joinPlans.get(l.get(0));
             List<Boolean> ascCol = new ArrayList<Boolean>();
-            for(int i=0; i<groups.size(); i++) {
+            for(int i = 0; i < groups.size(); i++) {
                 ascCol.add(false);
             }
 
@@ -750,11 +749,15 @@ public class SparkCompiler extends PhyPlanVisitor {
             }
             lr.setKeyType(DataType.CHARARRAY);
             lr.setPlans(lrPlans);
-			List<PhysicalPlan> secondKeyPlans = new ArrayList<PhysicalPlan>();
+            List<PhysicalPlan> secondKeyPlans = new ArrayList<PhysicalPlan>();
             lr.setResultType(DataType.TUPLE);
-			secondKeyPlans.addAll(groups);
-			lr.setSecondaryPlans(secondKeyPlans);
+            secondKeyPlans.addAll(groups);
+            lr.setSecondaryPlans(secondKeyPlans);
             sampleSparkOp.physicalPlan.addAsLeaf(lr);
+
+            POGlobalRearrange gl = new POGlobalRearrange(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            POGlobalRearrangeSpark poGlobal = new POGlobalRearrangeSpark(gl);
+            sampleSparkOp.physicalPlan.addAsLeaf(poGlobal);
 
             // ----- POPackage -----
             POPackage pkg = new POPackage(new OperatorKey(scope,nig.getNextNodeId(scope)));
@@ -767,19 +770,18 @@ public class SparkCompiler extends PhyPlanVisitor {
             sampleSparkOp.physicalPlan.addAsLeaf(pkg);
             //---------------------------------
 
-
+            //---------sortBagForeach------------------------------------
             POSort sort = new POSort(op.getOperatorKey(), op.getRequestedParallelism(), null, groups, ascCol, null);
-			//---------sortBagForeach----------
-			// Lets start building the plan which will have the sort
-			// for the foreach
-			PhysicalPlan sortBagPlan = new PhysicalPlan();
-			// Top level project which just projects the tuple which is coming
-			// from the foreach after the package
-			POProject bagPrj = new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
-			bagPrj.setColumn(1);
-			bagPrj.setResultType(DataType.BAG);
-			bagPrj.setOverloaded(true);
-			sortBagPlan.add(bagPrj);
+            // Lets start building the plan which will have the sort
+            // for the foreach
+            PhysicalPlan sortBagPlan = new PhysicalPlan();
+            // Top level project which just projects the tuple which is coming
+            // from the foreach after the package
+            POProject bagPrj = new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            bagPrj.setColumn(1);
+            bagPrj.setResultType(DataType.BAG);
+            bagPrj.setOverloaded(true);
+            sortBagPlan.add(bagPrj);
 
             //---
             // the projections which will form sort plans
@@ -839,12 +841,10 @@ public class SparkCompiler extends PhyPlanVisitor {
             // "parallel x" is not used in the script
             PhysicalPlan rpep = new PhysicalPlan();
             ConstantExpression rpce = new ConstantExpression(new OperatorKey(scope,nig.getNextNodeId(scope)));
-            rpce.setRequestedParallelism(rp);
+            rpce.setRequestedParallelism(rp); // for ParallelConstantVisitor
             // We temporarily set it to rp and will adjust it at runtime, because the final degree of parallelism
             // is unknown until we are ready to submit it. See PIG-2779.
             rpce.setValue(rp);
-            //---
-
             rpce.setResultType(DataType.INTEGER);
             rpep.add(rpce);
 
@@ -856,14 +856,25 @@ public class SparkCompiler extends PhyPlanVisitor {
             flattened2.add(false);
             flattened2.add(false);
 
-            POForEach nfe2 = new POForEach(new OperatorKey(scope,nig.getNextNodeId(scope)),-1, genEps, flattened2);
-            sampleSparkOp.physicalPlan.addAsLeaf(nfe2);
+            POForEach sortedBagForeach = new POForEach(new OperatorKey(scope,nig.getNextNodeId(scope)),-1, genEps, flattened2);
+            sampleSparkOp.physicalPlan.addAsLeaf(sortedBagForeach);
+            //-----------------------------------------------------------
+            // add a new foreach which has PartitionSkewedKeys udf
 
-            //---------------------------------
+            POForEach skewedKeyForEach = buildKeyDistForeach();
+            sampleSparkOp.physicalPlan.addAsLeaf(skewedKeyForEach);
+
+
+            //----------------------------------------------------------
 
             POBroadcast poBroadcast = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
             sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
             sparkPlan.add(sampleSparkOp);
+
+			// -------------------------
+			sampleSparkOp.markSampler();
+			//sampleSparkOp.requestedParallelism = 1;
+			// -----------------------
 
             addToPlan(op);
             curSparkOp.setSkewedJoinPartitionFile(poBroadcast.getOperatorKey().toString());
@@ -1229,5 +1240,49 @@ public class SparkCompiler extends PhyPlanVisitor {
         int errCode = 2026;
         String msg = "No expression plan found in POSort.";
         throw new PlanException(msg, errCode, PigException.BUG);
+    }
+
+    // build ForEach to generate key.dist for skewed join
+    private POForEach buildKeyDistForeach() throws PlanException {
+        // Let's connect the output from the foreach containing
+        // number of quantiles and the sorted bag of samples to
+        // another foreach with the FindQuantiles udf. The input
+        // to the FindQuantiles udf is a project(*) which takes the
+        // foreach input and gives it to the udf
+
+        String udfClassName = PartitionSkewedKeys.class.getName();
+
+        // pass configurations to the User Function
+        String percent = pigContext.getProperties().getProperty("pig.skewedjoin.reduce.memusage",
+                String.valueOf(PartitionSkewedKeys.DEFAULT_PERCENT_MEMUSAGE));
+        String maxCount = pigContext.getProperties().getProperty("pig.skewedjoin.reduce.maxtuple", "0");
+        String[] udfArgs = new String[] {percent, maxCount};
+
+        try{
+            PhysicalPlan ep = new PhysicalPlan();
+            POProject prjStar = new POProject(new OperatorKey(scope,nig.getNextNodeId(scope)));
+            prjStar.setResultType(DataType.TUPLE);
+            prjStar.setStar(true);
+            ep.add(prjStar);
+
+            List<PhysicalOperator> ufInps = new ArrayList<PhysicalOperator>();
+            ufInps.add(prjStar);
+
+            POUserFunc uf = new POUserFunc(new OperatorKey(scope,nig.getNextNodeId(scope)), -1, ufInps,
+                    new FuncSpec(udfClassName, udfArgs));
+            ep.add(uf);
+            ep.connect(prjStar, uf);
+
+            List<PhysicalPlan> eps = new ArrayList<PhysicalPlan>();
+            eps.add(ep);
+            List<Boolean> flattened3 = new ArrayList<Boolean>();
+            flattened3.add(false);
+            POForEach fe = new POForEach(new OperatorKey(scope,nig.getNextNodeId(scope)), -1, eps, flattened3);
+
+            return fe;
+
+        }catch(Exception e) {
+            throw new PlanException(e);
+        }
     }
 }
