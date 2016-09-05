@@ -372,11 +372,16 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
         }
     }
 
+    /**
+     * here, we don't reuse MR/Tez's ParallelConstantVisitor
+     * To automatic adjust reducer parallelism for skewed join, we only adjust the
+     * ConstantExpression operator after POPoissionSampleSpark operator
+     */
     private static class ParallelConstantVisitor extends PhyPlanVisitor {
 
         private int rp;
-
         private boolean replaced = false;
+        private boolean isAfterSampleOperator = false;
 
         public ParallelConstantVisitor(PhysicalPlan plan, int rp) {
             super(plan, new DepthFirstWalker<PhysicalOperator, PhysicalPlan>(
@@ -386,7 +391,7 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
 
         @Override
         public void visitConstant(ConstantExpression cnst) throws VisitorException {
-            if (cnst.getRequestedParallelism() == -1) {
+            if (isAfterSampleOperator && cnst.getRequestedParallelism() == -1) {
                 Object obj = cnst.getValue();
                 if (obj instanceof Integer) {
                     if (replaced) {
@@ -399,6 +404,11 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                     replaced = true;
                 }
             }
+        }
+
+        @Override
+        public void visitPoissonSampleSpark(POPoissonSampleSpark po){
+            isAfterSampleOperator = true;
         }
     }
 }

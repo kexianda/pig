@@ -322,19 +322,6 @@ public class SkewedJoinConverter implements
                 reducerMap = loadPartitionFromBroadcastVar(keyDist, reducers);
                 parallelism = reducers[0];
 
-//                if (keyDist != null && keyDist.value() != null) {
-//                    try {
-//                        Tuple t = keyDist.value().get(0);
-//                        Map<String, Object > distMap = (Map<String, Object>) t.get (0);
-//                        DataBag partitionList = (DataBag) distMap.get(PartitionSkewedKeys.PARTITION_LIST);
-//                        parallelism = Integer.valueOf(""+distMap.get(PartitionSkewedKeys.TOTAL_REDUCERS));
-//                        Tuple distTuple = keyDist.value().get(0);
-//
-//                        parallelism = (Integer) distTuple.get(0);
-//                        reducerMap = (Map<Tuple, Pair<Integer, Integer>>) distTuple.get(1);
-//                    } catch (ExecException e) {
-//                    }
-//                }
                 if (parallelism <= 0) {
                     parallelism = defaultParallelism;
                 }
@@ -399,15 +386,6 @@ public class SkewedJoinConverter implements
                 Integer[] reducers = new Integer[1];
                 reducerMap = loadPartitionFromBroadcastVar(keyDist, reducers);
                 parallelism = reducers[0];
-//                if (keyDist != null && keyDist.value() != null) {
-//                    try {
-//                        Tuple distTuple = keyDist.value().get(0);
-//
-//                        parallelism = (Integer) distTuple.get(0);
-//                        reducerMap = (Map<Tuple, Pair<Integer, Integer>>) distTuple.get(1);
-//                    } catch (ExecException e) {
-//                    }
-//                }
                 if (parallelism <= 0) {
                     parallelism = defaultParallelism;
                 }
@@ -552,6 +530,7 @@ public class SkewedJoinConverter implements
     private static Map<Tuple, Pair<Integer, Integer>> loadPartitionFromBroadcastVar(Broadcast<List<Tuple>> keyDist,
                      Integer[] totalReducers) {
         Map<Tuple, Pair<Integer, Integer>> reducerMap = new HashMap<>();
+        totalReducers[0] = -1; // set a default value
 
         if (keyDist == null || keyDist.value() == null) {
             // this could happen if sampling is empty
