@@ -41,54 +41,20 @@ public class BroadcastConverter implements RDDConverter<Tuple, List<Tuple>, Tupl
     @Override
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors,
                               Map<String, Broadcast<List<Tuple>>> broadcastedVars,
-                              POBroadcast physicalOperator) {
-        SparkUtil.assertPredecessorSize(predecessors, physicalOperator, 1);
+                              POBroadcast po) {
+        SparkUtil.assertPredecessorSize(predecessors, po, 1);
         RDD<Tuple> rdd = predecessors.get(0);
 
-//        //Mockup
-//        TupleFactory tf = TupleFactory.getInstance();
-//
-//        List<Tuple> mockupDist = new ArrayList<>();
-//        Map<Object, Pair<Integer, Integer>> reducerMap = new HashMap<>();
-//        try {
-//            Tuple t1 = tf.newTuple(2);
-//            Tuple t2 = tf.newTuple(2);
-//            t1.set(0, 300);
-//            t1.set(1, new DataByteArray("strawberry".getBytes()));
-//            Pair<Integer, Integer> p1 = new Pair<>(0,3);
-//
-//            t2.set(0, 200);
-//            t2.set(1, new DataByteArray("orange0001".getBytes()));
-//            Pair<Integer, Integer> p2 = new Pair<>(4,5);
-//
-//            reducerMap.put(t1, p1);
-//            reducerMap.put(t2, p2);
-//
-//            Tuple t = tf.newTuple(2);
-//            t.set(0, 6);  //number
-//            t.set(1, reducerMap);
-//            mockupDist.add(t);
-//        } catch (Exception e){
-//
-//        }
-//
-//        // rdd.toJavaRDD().collect()
-//        Broadcast<List<Tuple>> broadcastedTuples = sc.broadcast(mockupDist);
-//
-//        HashMap<String, Broadcast<List<Tuple>>> bcVarsMap = (HashMap<String, Broadcast<List<Tuple>>>) broadcastedVars;
-//        bcVarsMap.put(physicalOperator.getOperatorKey().toString(), broadcastedTuples);
-//        //List<Tuple> tuples = broadcastedTuples.value();
-//        //int s = tuples.size();
 
-
+        // Just collect the predecessor RDD, and broadcast it
         JavaRDD<Tuple> javaRDD = new JavaRDD<>(rdd, SparkUtil.getManifest(Tuple.class));
         Broadcast<List<Tuple>> broadcastedRDD  = sc.broadcast(javaRDD.collect());
 
-        // use operatorKey as broadcast variable's key
-        broadcastedVars.put(physicalOperator.getOperatorKey().toString(), broadcastedRDD);
-
-        // for debugging
-        List<Tuple> val = broadcastedRDD.value();
+        // Save the broadcast variable to broadcastedVars map, so that this
+        // broadcasted variable can be referenced by the driver client.
+        //
+        // The name of broadcasted variable should be set at compile time.
+        broadcastedVars.put(po.getBroadcastedVariableName(), broadcastedRDD);
 
         return rdd;
     }

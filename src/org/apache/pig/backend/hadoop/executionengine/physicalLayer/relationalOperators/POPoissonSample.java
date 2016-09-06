@@ -66,15 +66,6 @@ public class POPoissonSample extends PhysicalOperator {
     // new Sample result
     private transient Result newSample;
 
-    // Only for Spark
-    private boolean endOfInput = false;
-    public boolean isEndOfInput() {
-        return endOfInput;
-    }
-    public void setEndOfInput (boolean isEndOfInput) {
-        endOfInput = isEndOfInput;
-    }
-
     public POPoissonSample(OperatorKey k, int rp, int sr, float hp, long tm) {
         super(k, rp, null);
         sampleRate = sr;
@@ -142,9 +133,6 @@ public class POPoissonSample extends PhysicalOperator {
             }
         }
 
-        //Xianda: for test
-        skipInterval = 0;
-
         // skip tuples
         for (long numSkipped  = 0; numSkipped < skipInterval; numSkipped++) {
             res = processInput();
@@ -168,7 +156,7 @@ public class POPoissonSample extends PhysicalOperator {
             if (res.returnStatus == POStatus.STATUS_NULL) {
                 continue;
             } else if (res.returnStatus == POStatus.STATUS_EOP) {
-                if (this.parentPlan.endOfAllInput || isEndOfInput()) {
+                if (this.parentPlan.endOfAllInput) {
                     return createNumRowTuple((Tuple)newSample.result);
                 } else {
                     return res;

@@ -651,6 +651,9 @@ public class SparkCompiler extends PhyPlanVisitor {
     @Override
     public void visitSkewedJoin(POSkewedJoin op) throws VisitorException {
         try {
+            Random r = new Random();
+            String pigKeyDistFile = "pig.keyDistFile" + r.nextInt();
+
             // firstly,  build the sampling job
             SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
             sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
@@ -665,15 +668,14 @@ public class SparkCompiler extends PhyPlanVisitor {
 
             buildKeyDistForEachForSkewedJoin(sampleSparkOp);
 
-            buildBroadcastForSkewedJoin(sampleSparkOp);
+            buildBroadcastForSkewedJoin(sampleSparkOp, pigKeyDistFile);
 
             sampleSparkOp.markSampler();
             sparkPlan.add(sampleSparkOp);
 
             // secondly, build the join job.
             addToPlan(op);
-            Random r = new Random();
-            String pigKeyDistFile = "pig.keyDistFile" + r.nextInt();
+
             curSparkOp.setSkewedJoinPartitionFile(pigKeyDistFile);
 
             sparkPlan.connect(sampleSparkOp, curSparkOp);
@@ -1330,9 +1332,10 @@ public class SparkCompiler extends PhyPlanVisitor {
      * @param sampleSparkOp
      * @throws PlanException
      */
-    private void buildBroadcastForSkewedJoin(SparkOperator sampleSparkOp) throws PlanException {
+    private void buildBroadcastForSkewedJoin(SparkOperator sampleSparkOp, String pigKeyDistFile) throws PlanException {
 
         POBroadcast poBroadcast = new POBroadcast(new OperatorKey(scope, nig.getNextNodeId(scope)));
+        poBroadcast.setBroadcastedVariableName(pigKeyDistFile);
         sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
     }
 }

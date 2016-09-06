@@ -33,6 +33,8 @@ public class POBroadcast extends PhysicalOperator {
 
     private Map<OperatorKey, Broadcast<List<Tuple>>> broadcastedVarsMap;
 
+    private String broadcastedVariableName;
+
     public POBroadcast(OperatorKey k) {
         super(k);
     }
@@ -65,6 +67,13 @@ public class POBroadcast extends PhysicalOperator {
     @Override
     public void visit(PhyPlanVisitor v) throws VisitorException {
         v.visitBroadcast(this);
+    }
+
+    public void setBroadcastedVariableName(String varName) {
+        broadcastedVariableName = varName;
+    }
+    public String getBroadcastedVariableName() {
+        return  broadcastedVariableName;
     }
 
     public void setBroadcastedVarsMap(Map<OperatorKey,Broadcast<List<Tuple>>> broadcastedVarsMap) {
