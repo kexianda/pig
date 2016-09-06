@@ -532,7 +532,7 @@ public class SkewedJoinConverter implements
         Map<Tuple, Pair<Integer, Integer>> reducerMap = new HashMap<>();
         totalReducers[0] = -1; // set a default value
 
-        if (keyDist == null || keyDist.value() == null) {
+        if (keyDist == null || keyDist.value() == null || keyDist.value().size() == 0) {
             // this could happen if sampling is empty
             log.warn("Empty dist file: ");
             return reducerMap;
