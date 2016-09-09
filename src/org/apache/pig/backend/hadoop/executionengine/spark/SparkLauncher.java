@@ -51,6 +51,7 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfigurat
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PigMapReduce;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POBroadcastSpark;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCollectedGroup;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCounter;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PODistinct;
@@ -63,6 +64,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeCogroup;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPackage;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSampleSpark;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPreCombinerLocalRearrange;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PORank;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSkewedJoin;
@@ -71,6 +73,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStream;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POUnion;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.BroadcastConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.CollectedGroupConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.CounterConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.DistinctConverter;
@@ -85,6 +88,7 @@ import org.apache.pig.backend.hadoop.executionengine.spark.converter.LocalRearra
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeCogroupConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeJoinConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.PackageConverter;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.PoissonSampleConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RankConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.ReduceByConverter;
@@ -209,6 +213,8 @@ public class SparkLauncher extends Launcher {
         convertMap.put(POMergeCogroup.class, new MergeCogroupConverter());
         convertMap.put(POReduceBySpark.class, new ReduceByConverter());
         convertMap.put(POPreCombinerLocalRearrange.class, new LocalRearrangeConverter());
+        convertMap.put(POBroadcastSpark.class, new BroadcastConverter(sparkContext));
+        convertMap.put(POPoissonSampleSpark.class, new PoissonSampleConverter());
 
         uploadResources(sparkplan);
         new JobGraphBuilder(sparkplan, convertMap, sparkStats, sparkContext, jobMetricsListener, jobGroupID, jobConf, pigContext).visit();

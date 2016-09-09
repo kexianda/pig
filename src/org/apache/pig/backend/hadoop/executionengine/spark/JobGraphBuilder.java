@@ -42,13 +42,17 @@ import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MRConfigurat
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.PhyPlanSetter;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.UDFFinishVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.ConstantExpression;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POFRJoin;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POMergeJoin;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSampleSpark;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.SkewedJoinConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.NativeSparkOperator;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POJoinGroupSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOpPlanVisitor;
@@ -58,12 +62,12 @@ import org.apache.pig.data.Tuple;
 import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.io.FileSpec;
 import org.apache.pig.impl.plan.DependencyOrderWalker;
+import org.apache.pig.impl.plan.DepthFirstWalker;
 import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.VisitorException;
 import org.apache.pig.tools.pigstats.spark.SparkPigStats;
 import org.apache.pig.tools.pigstats.spark.SparkStatsUtil;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.rdd.RDD;
 
 import com.google.common.collect.Lists;
@@ -283,6 +287,12 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
                     + physicalOperator.getClass().getSimpleName() + " "
                     + physicalOperator);
             List<RDD<Tuple>> allPredRDDs = sortPredecessorRDDs(operatorKeysOfAllPreds);
+
+            if (sparkOperator.isSkewedJoin() && converter instanceof SkewedJoinConverter) {
+                SkewedJoinConverter skewedJoinConverter = (SkewedJoinConverter) converter;
+                skewedJoinConverter.setSkewedJoinPartitionFile(sparkOperator.getSkewedJoinPartitionFile());
+            }
+            adjustRuntimeParallelismForSkewedJoin(physicalOperator, sparkOperator, allPredRDDs);
             nextRDD = converter.convert(allPredRDDs, physicalOperator);
 
             if (nextRDD == null) {
@@ -365,5 +375,72 @@ public class JobGraphBuilder extends SparkOpPlanVisitor {
         }
         seenJobIDs.addAll(unseenJobIDs);
         return unseenJobIDs;
+    }
+
+
+    /**
+     * if the parallelism of skewed join is NOT specified by user in the script when sampling,
+     * set a default parallelism for sampling
+     *
+     * @param physicalOperator
+     * @param sparkOperator
+     * @param allPredRDDs
+     * @throws VisitorException
+     */
+    private void adjustRuntimeParallelismForSkewedJoin(PhysicalOperator physicalOperator,
+                                                       SparkOperator sparkOperator,
+                                                       List<RDD<Tuple>> allPredRDDs) throws VisitorException {
+        // We need to calculate the final number of reducers of the next job (skew-join)
+        // adjust parallelism of ConstantExpression
+        if (sparkOperator.isSampler() && sparkPlan.getSuccessors(sparkOperator) != null
+                && physicalOperator instanceof POPoissonSampleSpark) {
+            // set the runtime #reducer of the next job as the #partition
+
+            int defaultParallelism = SparkUtil.getParallelism(allPredRDDs, physicalOperator);
+
+            ParallelConstantVisitor visitor =
+                    new ParallelConstantVisitor(sparkOperator.physicalPlan, defaultParallelism);
+            visitor.visit();
+        }
+    }
+
+    /**
+     * here, we don't reuse MR/Tez's ParallelConstantVisitor
+     * To automatic adjust reducer parallelism for skewed join, we only adjust the
+     * ConstantExpression operator after POPoissionSampleSpark operator
+     */
+    private static class ParallelConstantVisitor extends PhyPlanVisitor {
+
+        private int rp;
+        private boolean replaced = false;
+        private boolean isAfterSampleOperator = false;
+
+        public ParallelConstantVisitor(PhysicalPlan plan, int rp) {
+            super(plan, new DepthFirstWalker<PhysicalOperator, PhysicalPlan>(
+                    plan));
+            this.rp = rp;
+        }
+
+        @Override
+        public void visitConstant(ConstantExpression cnst) throws VisitorException {
+            if (isAfterSampleOperator && cnst.getRequestedParallelism() == -1) {
+                Object obj = cnst.getValue();
+                if (obj instanceof Integer) {
+                    if (replaced) {
+                        // sample job should have only one ConstantExpression
+                        throw new VisitorException("Invalid reduce plan: more " +
+                                "than one ConstantExpression found in sampling job");
+                    }
+                    cnst.setValue(rp);
+                    cnst.setRequestedParallelism(rp);
+                    replaced = true;
+                }
+            }
+        }
+
+        @Override
+        public void visitPoissonSampleSpark(POPoissonSampleSpark po) {
+            isAfterSampleOperator = true;
+        }
     }
 }

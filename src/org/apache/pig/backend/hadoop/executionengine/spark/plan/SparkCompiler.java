@@ -25,7 +25,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Properties;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 import org.apache.commons.logging.Log;
@@ -36,13 +38,16 @@ import org.apache.pig.IndexableLoadFunc;
 import org.apache.pig.LoadFunc;
 import org.apache.pig.OrderedLoadFunc;
 import org.apache.pig.PigException;
+import org.apache.pig.PigConfiguration;
 import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.MergeJoinIndexer;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.ScalarPhyFinder;
 import org.apache.pig.backend.hadoop.executionengine.mapReduceLayer.plans.UDFFinder;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.POStatus;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.ConstantExpression;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.POProject;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.expressionOperators.POUserFunc;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhysicalPlan;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCollectedGroup;
@@ -68,12 +73,17 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOpe
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.Packager;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POCounter;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.PORank;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POBroadcastSpark;
+import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POPoissonSampleSpark;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.util.PlanHelper;
 import org.apache.pig.backend.hadoop.executionengine.spark.SparkUtil;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.NativeSparkOperator;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
+import org.apache.pig.data.DataType;
 import org.apache.pig.impl.PigContext;
 import org.apache.pig.impl.builtin.DefaultIndexableLoader;
+import org.apache.pig.impl.builtin.GetMemNumRows;
+import org.apache.pig.impl.builtin.PartitionSkewedKeys;
 import org.apache.pig.impl.io.FileLocalizer;
 import org.apache.pig.impl.io.FileSpec;
 import org.apache.pig.impl.plan.DepthFirstWalker;
@@ -83,7 +93,9 @@ import org.apache.pig.impl.plan.OperatorKey;
 import org.apache.pig.impl.plan.OperatorPlan;
 import org.apache.pig.impl.plan.PlanException;
 import org.apache.pig.impl.plan.VisitorException;
+import org.apache.pig.impl.util.MultiMap;
 import org.apache.pig.impl.util.ObjectSerializer;
+import org.apache.pig.impl.util.Pair;
 import org.apache.pig.impl.util.Utils;
 import org.apache.pig.newplan.logical.relational.LOJoin;
 
@@ -96,6 +108,7 @@ public class SparkCompiler extends PhyPlanVisitor {
     private static final Log LOG = LogFactory.getLog(SparkCompiler.class);
 
     private PigContext pigContext;
+	private Properties pigProperties;
 
 	// The physicalPlan that is being compiled
 	private PhysicalPlan physicalPlan;
@@ -122,6 +135,7 @@ public class SparkCompiler extends PhyPlanVisitor {
 						physicalPlan));
 		this.physicalPlan = physicalPlan;
 		this.pigContext = pigContext;
+		this.pigProperties = pigContext.getProperties();
 		this.sparkPlan = new SparkOperPlan();
 		this.phyToSparkOpMap = new HashMap<PhysicalOperator, SparkOperator>();
 		this.udfFinder = new UDFFinder();
@@ -679,8 +693,36 @@ public class SparkCompiler extends PhyPlanVisitor {
     @Override
     public void visitSkewedJoin(POSkewedJoin op) throws VisitorException {
         try {
-            addToPlan(op);
-            phyToSparkOpMap.put(op, curSparkOp);
+			Random r = new Random();
+			String pigKeyDistFile = "pig.keyDistFile" + r.nextInt();
+
+			// firstly,  build the sampling job
+			SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
+			sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
+
+			buildSampleOperatorForSkewedJoin(sampleSparkOp);
+
+			buildMemRowNumForEachForSkewedJoin(op, sampleSparkOp);
+
+			buildSamplingPackageForSkewedJoin(op, sampleSparkOp);
+
+			buildSortBagForEachForSkewedJoin(op, sampleSparkOp);
+
+			buildKeyDistForEachForSkewedJoin(sampleSparkOp);
+
+			buildBroadcastForSkewedJoin(sampleSparkOp, pigKeyDistFile);
+
+			sampleSparkOp.markSampler();
+			sparkPlan.add(sampleSparkOp);
+
+			// secondly, build the join job.
+			addToPlan(op);
+			curSparkOp.setSkewedJoinPartitionFile(pigKeyDistFile);
+
+			// do sampling job before join job
+			sparkPlan.connect(sampleSparkOp, curSparkOp);
+
+			phyToSparkOpMap.put(op, curSparkOp);
         } catch (Exception e) {
             int errCode = 2034;
             String msg = "Error compiling operator " +
@@ -1157,4 +1199,325 @@ public class SparkCompiler extends PhyPlanVisitor {
         return new FileSpec(FileLocalizer.getTemporaryPath(pigContext).toString(),
                 new FuncSpec(Utils.getTmpFileCompressorName(pigContext)));
     }
+
+
+	private Pair<POProject, Byte>[] getSortCols(List<PhysicalPlan> plans) throws PlanException, ExecException {
+		if (plans != null) {
+			@SuppressWarnings("unchecked")
+			Pair<POProject, Byte>[] ret = new Pair[plans.size()];
+			int i = -1;
+			for (PhysicalPlan plan : plans) {
+				PhysicalOperator op = plan.getLeaves().get(0);
+				POProject proj;
+				if (op instanceof POProject) {
+					if (((POProject) op).isStar()) return null;
+					proj = (POProject) op;
+				} else {
+					proj = null;
+				}
+				byte type = op.getResultType();
+				ret[++i] = new Pair<POProject, Byte>(proj, type);
+			}
+			return ret;
+		}
+		int errCode = 2026;
+		String msg = "No expression plan found in POSort.";
+		throw new PlanException(msg, errCode, PigException.BUG);
+	}
+
+
+	/**
+	 * build a POPoissonSampleSpark operator for SkewedJoin's sampling job
+	 */
+	private void buildSampleOperatorForSkewedJoin(SparkOperator sampleSparkOp) throws PlanException {
+		int sampleRate = POPoissonSampleSpark.DEFAULT_SAMPLE_RATE;
+		if (pigProperties.containsKey(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE)) {
+			sampleRate = Integer.valueOf(pigProperties.getProperty(PigConfiguration.PIG_POISSON_SAMPLER_SAMPLE_RATE));
+		}
+		float heapPerc = PartitionSkewedKeys.DEFAULT_PERCENT_MEMUSAGE;
+		if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEMUSAGE)) {
+			heapPerc = Float.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEMUSAGE));
+		}
+		long totalMemory = -1;
+		if (pigProperties.containsKey(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM)) {
+			totalMemory = Long.valueOf(pigProperties.getProperty(PigConfiguration.PIG_SKEWEDJOIN_REDUCE_MEM));
+		}
+		POPoissonSampleSpark poSample = new POPoissonSampleSpark(new OperatorKey(scope, nig.getNextNodeId(scope)),
+				-1, sampleRate, heapPerc, totalMemory);
+
+		sampleSparkOp.physicalPlan.addAsLeaf(poSample);
+	}
+
+	/**
+	 * build a ForEach operator to generate key.dist for SkewedJoin's sampling job.
+	 * <p>
+	 * This foreach will pick the key columns from the POPoissonSample output
+	 * and use UDF GetMemNumRows to generate memSize & rowNum
+	 * <p>
+	 * Input: (key, value)
+	 * Output: (key, mem, rowNum)
+	 */
+	private void buildMemRowNumForEachForSkewedJoin(POSkewedJoin op, SparkOperator sampleSparkOp)
+			throws PlanException {
+		MultiMap<PhysicalOperator, PhysicalPlan> joinPlans = op.getJoinPlans();
+		List<PhysicalOperator> l = physicalPlan.getPredecessors(op);
+		List<PhysicalPlan> groups = joinPlans.get(l.get(0));
+		List<Boolean> ascCol = new ArrayList<Boolean>();
+		for (int i = 0; i < groups.size(); i++) {
+			ascCol.add(false);
+		}
+
+		// Set up transform plan to get keys and memory size of input tuples.
+		// It first adds all the plans to get key columns.
+		List<PhysicalPlan> transformPlans = new ArrayList<PhysicalPlan>();
+		transformPlans.addAll(groups);
+
+		// then it adds a column for memory size
+		POProject prjStar = new POProject(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		prjStar.setResultType(DataType.TUPLE);
+		prjStar.setStar(true);
+
+		List<PhysicalOperator> ufInps = new ArrayList<PhysicalOperator>();
+		ufInps.add(prjStar);
+
+		PhysicalPlan memNumRowPlan = new PhysicalPlan();
+		POUserFunc uf = new POUserFunc(new OperatorKey(scope, nig.getNextNodeId(scope)), -1, ufInps,
+				new FuncSpec(GetMemNumRows.class.getName(), (String[]) null));
+		uf.setResultType(DataType.TUPLE);
+		memNumRowPlan.add(uf);
+		memNumRowPlan.add(prjStar);
+		memNumRowPlan.connect(prjStar, uf);
+
+		transformPlans.add(memNumRowPlan);
+		List<Boolean> flat = new ArrayList<Boolean>();
+		List<PhysicalPlan> eps = new ArrayList<PhysicalPlan>();
+
+		for (int i = 0; i < transformPlans.size(); i++) {
+			eps.add(transformPlans.get(i));
+			flat.add(true);
+		}
+
+		// This foreach will pick the sort key columns from the POPoissonSample output
+		POForEach memNumRowForEach = new POForEach(new OperatorKey(scope, nig.getNextNodeId(scope)),
+				-1, eps, flat);
+
+		sampleSparkOp.physicalPlan.addAsLeaf(memNumRowForEach);
+	}
+
+	/**
+	 * build package operator for SkewedJoin's sampling job.
+	 * package all the sampling records to a bag
+	 *
+	 * @param op
+	 * @param sampleSparkOp
+	 * @throws PlanException
+	 * @throws ExecException
+	 */
+	private void buildSamplingPackageForSkewedJoin(POSkewedJoin op, SparkOperator sampleSparkOp)
+			throws PlanException, ExecException {
+		MultiMap<PhysicalOperator, PhysicalPlan> joinPlans = op.getJoinPlans();
+		List<PhysicalOperator> l = physicalPlan.getPredecessors(op);
+		List<PhysicalPlan> groups = joinPlans.get(l.get(0));
+		List<Boolean> ascCol = new ArrayList<Boolean>();
+		for (int i = 0; i < groups.size(); i++) {
+			ascCol.add(false);
+		}
+
+		// ----- POLocalRearrange -----
+		// Now set up a POLocalRearrange which has "all" as the key and the output of the
+		// foreach will be the "value" out of POLocalRearrange
+		PhysicalPlan cep = new PhysicalPlan();
+		ConstantExpression ce = new ConstantExpression(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		ce.setValue("all");
+		ce.setResultType(DataType.CHARARRAY);
+		cep.add(ce);
+
+		List<PhysicalPlan> lrPlans = new ArrayList<PhysicalPlan>();
+		lrPlans.add(cep);
+		POLocalRearrange lr = new POLocalRearrange(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		try {
+			lr.setIndex(0);
+		} catch (ExecException e) {
+			int errCode = 2058;
+			String msg = "Unable to set index on newly created POLocalRearrange.";
+			throw new PlanException(msg, errCode, PigException.BUG, e);
+		}
+		lr.setKeyType(DataType.CHARARRAY);
+		lr.setPlans(lrPlans);
+		List<PhysicalPlan> secondKeyPlans = new ArrayList<PhysicalPlan>();
+		lr.setResultType(DataType.TUPLE);
+		secondKeyPlans.addAll(groups);
+		lr.setSecondaryPlans(secondKeyPlans);
+		sampleSparkOp.physicalPlan.addAsLeaf(lr);
+
+		// ----- POGlobalRearrange -----
+		POGlobalRearrange gl = new POGlobalRearrange(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		POGlobalRearrangeSpark poGlobal = new POGlobalRearrangeSpark(gl);
+		sampleSparkOp.physicalPlan.addAsLeaf(poGlobal);
+
+		// ----- POPackage -----
+		POPackage pkg = new POPackage(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		Packager pkgr = new Packager();
+		pkg.setPkgr(pkgr);
+		pkgr.setKeyType(DataType.CHARARRAY);
+		pkg.setNumInps(1);
+		boolean[] inner = {false};
+		pkgr.setInner(inner);
+		sampleSparkOp.physicalPlan.addAsLeaf(pkg);
+	}
+
+	/**
+	 * @param op
+	 * @param sampleSparkOp
+	 * @throws PlanException
+	 */
+	private void buildSortBagForEachForSkewedJoin(POSkewedJoin op, SparkOperator sampleSparkOp) throws PlanException {
+		MultiMap<PhysicalOperator, PhysicalPlan> joinPlans = op.getJoinPlans();
+		List<PhysicalOperator> l = physicalPlan.getPredecessors(op);
+		List<PhysicalPlan> groups = joinPlans.get(l.get(0));
+		List<Boolean> ascCol = new ArrayList<Boolean>();
+		for (int i = 0; i < groups.size(); i++) {
+			ascCol.add(false);
+		}
+
+		POSort sort = new POSort(op.getOperatorKey(), op.getRequestedParallelism(), null, groups, ascCol, null);
+		// Lets start building the plan which will have the sort
+		// for the foreach
+		PhysicalPlan sortBagPlan = new PhysicalPlan();
+		// Top level project which just projects the tuple which is coming
+		// from the foreach after the package
+		POProject bagPrj = new POProject(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		bagPrj.setColumn(1);
+		bagPrj.setResultType(DataType.BAG);
+		bagPrj.setOverloaded(true);
+		sortBagPlan.add(bagPrj);
+
+		// the projections which will form sort plans
+		List<PhysicalPlan> nesSortPlanLst = new ArrayList<PhysicalPlan>();
+		Pair<POProject, Byte>[] sortProjs;
+		try {
+			sortProjs = getSortCols(sort.getSortPlans());
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+		// Set up the projections of the key columns
+		if (sortProjs == null) {
+			PhysicalPlan ep = new PhysicalPlan();
+			POProject prj = new POProject(new OperatorKey(scope,
+					nig.getNextNodeId(scope)));
+			prj.setStar(true);
+			prj.setOverloaded(false);
+			prj.setResultType(DataType.TUPLE);
+			ep.add(prj);
+			nesSortPlanLst.add(ep);
+		} else {
+			for (int i = 0; i < sortProjs.length; i++) {
+				POProject prj =
+						new POProject(new OperatorKey(scope, nig.getNextNodeId(scope)));
+
+				prj.setResultType(sortProjs[i].second);
+				if (sortProjs[i].first != null && sortProjs[i].first.isProjectToEnd()) {
+					if (i != sortProjs.length - 1) {
+						//project to end has to be the last sort column
+						throw new AssertionError("Project-range to end (x..)" +
+								" is supported in order-by only as last sort column");
+					}
+					prj.setProjectToEnd(i);
+					break;
+				} else {
+					prj.setColumn(i);
+				}
+				prj.setOverloaded(false);
+
+				PhysicalPlan ep = new PhysicalPlan();
+				ep.add(prj);
+				nesSortPlanLst.add(ep);
+			}
+		}
+		sort.setSortPlans(nesSortPlanLst);
+		sort.setResultType(DataType.BAG);
+		sortBagPlan.add(sort);
+		sortBagPlan.add(bagPrj);
+		sortBagPlan.connect(bagPrj, sort);
+
+		int rp = op.getRequestedParallelism();
+		// The plan which will have a constant representing the
+		// degree of parallelism for the final order by map-reduce job
+		// this will either come from a "order by parallel x" in the script
+		// or will be the default number of reducers for the cluster if
+		// "parallel x" is not used in the script
+		PhysicalPlan rpep = new PhysicalPlan();
+		ConstantExpression rpce = new ConstantExpression(new OperatorKey(scope, nig.getNextNodeId(scope)));
+
+		rpce.setRequestedParallelism(rp); // for ParallelConstantVisitor
+
+		// We temporarily set it to rp and will adjust it at runtime, because the final degree of parallelism
+		// is unknown until we are ready to submit it. See PIG-2779.
+		rpce.setValue(rp);
+		rpce.setResultType(DataType.INTEGER);
+		rpep.add(rpce);
+
+		List<PhysicalPlan> inputExprPlans = new ArrayList<PhysicalPlan>();
+		inputExprPlans.add(rpep);
+		inputExprPlans.add(sortBagPlan);
+
+		List<Boolean> flattened = new ArrayList<Boolean>();
+		flattened.add(false);
+		flattened.add(false);
+
+		POForEach sortedBagForeach = new POForEach(new OperatorKey(scope, nig.getNextNodeId(scope)), -1, inputExprPlans, flattened);
+		sampleSparkOp.physicalPlan.addAsLeaf(sortedBagForeach);
+	}
+
+	/**
+	 * build a ForEach operator to generate key.dist for SkewedJoin's sampling job
+	 *
+	 * @return
+	 * @throws PlanException
+	 */
+	private void buildKeyDistForEachForSkewedJoin(SparkOperator sampleSparkOp) throws PlanException {
+
+		String udfClassName = PartitionSkewedKeys.class.getName();
+
+		// pass configurations to the User Function
+		String percent = pigContext.getProperties().getProperty("pig.skewedjoin.reduce.memusage",
+				String.valueOf(PartitionSkewedKeys.DEFAULT_PERCENT_MEMUSAGE));
+		String maxCount = pigContext.getProperties().getProperty("pig.skewedjoin.reduce.maxtuple", "0");
+		String[] udfArgs = new String[]{percent, maxCount};
+
+		PhysicalPlan ep = new PhysicalPlan();
+		POProject prjStar = new POProject(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		prjStar.setResultType(DataType.TUPLE);
+		prjStar.setStar(true);
+		ep.add(prjStar);
+
+		List<PhysicalOperator> ufInps = new ArrayList<PhysicalOperator>();
+		ufInps.add(prjStar);
+
+		POUserFunc uf = new POUserFunc(new OperatorKey(scope, nig.getNextNodeId(scope)), -1, ufInps,
+				new FuncSpec(udfClassName, udfArgs));
+		ep.add(uf);
+		ep.connect(prjStar, uf);
+
+		List<PhysicalPlan> eps = new ArrayList<PhysicalPlan>();
+		eps.add(ep);
+		List<Boolean> flattened = new ArrayList<Boolean>();
+		flattened.add(false);
+		POForEach skewedKeyForEach = new POForEach(new OperatorKey(scope, nig.getNextNodeId(scope)), -1, eps, flattened);
+
+		sampleSparkOp.physicalPlan.addAsLeaf(skewedKeyForEach);
+	}
+
+	/**
+	 * Add POBroadcastSpark operator to broadcast key distribution for SkewedJoin's sampling job
+	 *
+	 * @param sampleSparkOp
+	 * @throws PlanException
+	 */
+	private void buildBroadcastForSkewedJoin(SparkOperator sampleSparkOp, String pigKeyDistFile) throws PlanException {
+
+		POBroadcastSpark poBroadcast = new POBroadcastSpark(new OperatorKey(scope, nig.getNextNodeId(scope)));
+		poBroadcast.setBroadcastedVariableName(pigKeyDistFile);
+		sampleSparkOp.physicalPlan.addAsLeaf(poBroadcast);
+	}
 }
