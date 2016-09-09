@@ -590,4 +590,229 @@ public class SkewedJoinConverter implements
         return reducerMap;
     }
 
+    // ================================= solution 2 ===================
+    private static class PartitionIndexedKey extends  IndexedKey {
+        // for user defined partitioner
+        int partitionId;
+
+        public PartitionIndexedKey(byte index, Object key) {
+            super(index, key);
+            partitionId = -1;
+        }
+
+        public PartitionIndexedKey(byte index, Object key, int pid) {
+            super(index, key);
+            partitionId = pid;
+        }
+
+        public int getPartitionId() {
+            return partitionId;
+        }
+        private void setPartitionId(int pid) {
+            partitionId = pid;
+        }
+    }
+    /**
+     * append a Partition id to the records from skewed table.
+     * so that the SkewedJoinPartitioner can send skewed records to different reducer
+     *
+     * see: https://wiki.apache.org/pig/PigSkewedJoinSpec
+     */
+    private static class SkewPartitionIndexKeyFunction extends
+            AbstractFunction1<Tuple, Tuple2<PartitionIndexedKey, Tuple>> implements
+            Serializable {
+
+        private final SkewedJoinConverter poSkewedJoin;
+        private final int LR_index; // 0 for left table, 1 for right table
+
+        private final Broadcast<List<Tuple>> keyDist;
+        private final Integer defaultParallelism;
+
+        transient private boolean initialized = false;
+        transient protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
+        transient private Integer parallelism = -1;
+        transient private Map<Tuple, Integer> currentIndexMap;
+
+        public SkewPartitionIndexKeyFunction(SkewedJoinConverter poSkewedJoin, int LR_index,
+                                              Broadcast<List<Tuple>> keyDist,
+                                              Integer defaultParallelism) {
+            this.poSkewedJoin = poSkewedJoin;
+            this.LR_index = LR_index;
+
+            this.keyDist = keyDist;
+            this.defaultParallelism = defaultParallelism;
+        }
+
+        @Override
+        public Tuple2<PartitionIndexedKey, Tuple> apply(Tuple tuple) {
+            // attach tuple to LocalRearrange
+            poSkewedJoin.LRs[LR_index].attachInput(tuple);
+
+            try {
+//                TupleFactory tf = TupleFactory.getInstance();
+
+                // getNextTuple() returns the rearranged tuple
+                Result lrOut = poSkewedJoin.LRs[LR_index].getNextTuple();
+
+                // If tuple is (AA, 5) and key index is $1, then it lrOut is 0 5
+                // (AA), so get(1) returns key
+                Byte index = (Byte)((Tuple) lrOut.result).get(0);
+                Object key = ((Tuple) lrOut.result).get(1);
+
+                Tuple keyTuple = (Tuple)key;
+                int partitionId = getPartitionId(keyTuple);
+                PartitionIndexedKey pIndexKey = new PartitionIndexedKey(index, keyTuple, partitionId);
+
+                // make a (key, value) pair
+                Tuple2<PartitionIndexedKey, Tuple> tuple_KeyValue = new Tuple2<PartitionIndexedKey, Tuple>(
+                        pIndexKey,
+                        tuple);
+
+
+//                Tuple keyTuple = tf.newTuple(origKey.size() + 1);
+//                int partitionId = getPartitionId(origKey);
+//                keyTuple.set(0, partitionId);
+//                for(int i = 0; i < origKey.size(); i++ ) {
+//                    keyTuple.set(i+1, origKey.get(i));
+//                }
+//
+//                IndexedKey indexedKeyWithPartitionId = new IndexedKey(index, keyTuple);
+//
+//                Tuple value =  tf.newTuple(tuple.size() + 1);
+//                value.set(0, partitionId);
+//                for(int i = 0; i < tuple.size(); i++ ) {
+//                    value.set(i+1, tuple.get(i));
+//                }
+//
+//                // make a (key, value) pair
+//                Tuple2<IndexedKey, Tuple> tuple_KeyValue = new Tuple2<IndexedKey, Tuple>(
+//                        indexedKeyWithPartitionId,
+//                        value);
+
+                return tuple_KeyValue;
+            } catch (Exception e) {
+                System.out.print(e);
+                return null;
+            }
+        }
+
+        private Integer getPartitionId(Tuple keyTuple) {
+            if (!initialized) {
+                Integer[] reducers = new Integer[1];
+                reducerMap = loadKeyDistribution(keyDist, reducers);
+                parallelism = reducers[0];
+
+                if (parallelism <= 0) {
+                    parallelism = defaultParallelism;
+                }
+
+                currentIndexMap = Maps.newHashMap();
+
+                initialized = true;
+            }
+
+            // for partition table, compute the index based on the sampler output
+            Pair <Integer, Integer> indexes;
+            Integer curIndex = -1;
+
+            indexes = reducerMap.get(keyTuple);
+
+            // if the reducerMap does not contain the key return -1 so that the
+            // partitioner will do the default hash based partitioning
+            if (indexes == null) {
+                return -1;
+            }
+
+            if (currentIndexMap.containsKey(keyTuple)) {
+                curIndex = currentIndexMap.get(keyTuple);
+            }
+
+            if (curIndex >= (indexes.first + indexes.second) || curIndex == -1) {
+                curIndex = indexes.first;
+            } else {
+                curIndex++;
+            }
+
+            // set it in the map
+            currentIndexMap.put(keyTuple, curIndex);
+            return (curIndex % parallelism);
+        }
+
+    }
+
+    /**
+     * POPartitionRearrange is not used in spark mode now,
+     * Here, use flatMap and CopyStreamWithPidFunction to copy the
+     * stream records to the multiple reducers
+     *
+     * see: https://wiki.apache.org/pig/PigSkewedJoinSpec
+     */
+    private static class StreamPartitionIndexKeyFunction implements FlatMapFunction <Tuple, Tuple2<PartitionIndexedKey, Tuple> > {
+
+        private SkewedJoinConverter poSkewedJoin;
+        private final Broadcast<List<Tuple>> keyDist;
+        private final Integer defaultParallelism;
+
+        private transient  boolean initialized = false;
+        protected transient Map<Tuple, Pair<Integer, Integer>> reducerMap;
+        private transient Integer parallelism;
+
+        public StreamPartitionIndexKeyFunction(SkewedJoinConverter poSkewedJoin,
+                                               Broadcast<List<Tuple>> keyDist,
+                                               Integer defaultParallelism) {
+            this.poSkewedJoin = poSkewedJoin;
+            this.keyDist = keyDist;
+            this.defaultParallelism = defaultParallelism;
+        }
+
+        public Iterable<Tuple2<PartitionIndexedKey, Tuple>> call(Tuple t) throws Exception {
+            if (!initialized) {
+                Integer[] reducers = new Integer[1];
+                reducerMap = loadKeyDistribution(keyDist, reducers);
+                parallelism = reducers[0];
+                if (parallelism <= 0) {
+                    parallelism = defaultParallelism;
+                }
+                initialized = true;
+            }
+
+            ArrayList<Tuple2<PartitionIndexedKey, Tuple>> l = new ArrayList();
+            TupleFactory tf = TupleFactory.getInstance();
+
+//            Tuple key = (Tuple) t._1.getKey();
+//            Pair<Integer, Integer> indexes = reducerMap.get(key);
+//
+//            // For non skewed keys, we set the partition index to be -1
+//            // so that the partitioner will do the default hash based partitioning
+//            if (indexes == null) {
+//                indexes = new Pair<>(-1, 0);
+//            }
+//
+//            Tuple value = t._2;
+//
+//            for (Integer reducerIdx = indexes.first, cnt = 0; cnt <= indexes.second; reducerIdx++, cnt++) {
+//                if (reducerIdx >= parallelism) {
+//                    reducerIdx = 0;
+//                }
+//                Tuple newKey = tf.newTuple(key.size() + 1);
+//                // set the partition index
+//                newKey.set(0, reducerIdx.intValue());
+//                for (int i = 0; i < key.size(); i++) {
+//                    newKey.set(i + 1, key.get(i));
+//                }
+//                IndexedKey newIdxKey = new IndexedKey((byte)1, newKey);
+//
+//                Tuple newValue = tf.newTuple(value.size() + 1);
+//                newValue.set(0, reducerIdx.intValue());
+//                for (int i = 0; i < value.size(); i++) {
+//                    newValue.set(i + 1, value.get(i));
+//                }
+//
+//                l.add(new Tuple2(newIdxKey, newValue));
+//            }
+
+            return  l;
+        }
+    }
+
 }

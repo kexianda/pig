@@ -203,6 +203,9 @@ public class POPackage extends PhysicalOperator {
             if (pkgr instanceof MultiQueryPackager) {
                 lastBagReadOnly = false;
             }
+
+            // TODO: for debugging
+            useDefaultBag = true;
         }
         int numInputs = pkgr.getNumInputs(keyWritable.getIndex());
         boolean[] readOnce = new boolean[numInputs];
