@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.util.*;
 
+import com.google.common.base.Optional;
 import com.google.common.collect.Maps;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -108,6 +109,23 @@ public class SkewedJoinConverter implements
         JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = skewIndexedJavaPairRDD
                 .join(streamIndexedJavaPairRDD, buildPartitioner(keyDist, defaultParallelism));
 
+        boolean[] innerFlags = poSkewedJoin.getInnerFlags();
+        if (innerFlags[0] && !innerFlags[1]) {
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> leftOuterResultKeyValue =
+                    skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD,
+                            buildPartitioner(keyDist, defaultParallelism));
+
+            JavaRDD<Tuple> leftOuterResult = leftOuterResultKeyValue.mapPartitions(new ToValueFunctionGeneric());
+            return leftOuterResult.rdd();
+        }
+
+//        Optional<Integer> oi = Optional.of();
+//        oi.absent();
+        //if (oi.isPresent())
+        // oi.get()
+        // oi.orNull()
+        //Optional.fromNullable()
+
         JavaRDD<Tuple> result = result_KeyValue
                 .mapPartitions(new ToValueFunction());
 
@@ -193,6 +211,73 @@ public class SkewedJoinConverter implements
         }
     }
 
+    private static class ToValueFunctionGeneric<L, R> implements
+            FlatMapFunction<Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>>, Tuple>, Serializable {
+
+        private class Tuple2TransformIterable implements Iterable<Tuple> {
+
+            Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>> in;
+
+            Tuple2TransformIterable(
+                    Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>> input) {
+                in = input;
+            }
+
+            public Iterator<Tuple> iterator() {
+                return new IteratorTransform<Tuple2<PartitionIndexedKey, Tuple2<L, R>>, Tuple>(
+                        in) {
+                    @Override
+                    protected Tuple transform(
+                            Tuple2<PartitionIndexedKey, Tuple2<L, R>> next) {
+                        try {
+
+                            L leftTuple = next._2._1;
+                            R rightTuple = next._2._2;
+                            //if(leftTuple instanceof Optional.fromNullable(null)){}
+                            if(rightTuple instanceof Tuple){
+
+                            }
+                            //if(rightTuple.getClass())
+                            //getRawType
+                            // TypeToken
+
+                            if(leftTuple instanceof Tuple){
+
+                            }
+
+//                            TupleFactory tf = TupleFactory.getInstance();
+//                            Tuple result = tf.newTuple(leftTuple.size()
+//                                    + rightTuple.size());
+//
+//                            // append the two tuples together to make a
+//                            // resulting tuple
+//                            for (int i = 0; i < leftTuple.size(); i++)
+//                                result.set(i, leftTuple.get(i));
+//                            for (int i = 0; i < rightTuple.size(); i++)
+//                                result.set(i + leftTuple.size(),
+//                                        rightTuple.get(i));
+//
+//                            System.out.println("MJC: Result = "
+//                                    + result.toDelimitedString(" "));
+//
+//                            return result;
+                            return null;
+
+                        } catch (Exception e) {
+                            System.out.println(e);
+                        }
+                        return null;
+                    }
+                };
+            }
+        }
+
+        @Override
+        public Iterable<Tuple> call(
+                Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>> input) {
+            return new Tuple2TransformIterable(input);
+        }
+    }
     /**
      * get runtime default parallelism
      *
