@@ -109,15 +109,17 @@ public class SkewedJoinConverter implements
         JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = skewIndexedJavaPairRDD
                 .join(streamIndexedJavaPairRDD, buildPartitioner(keyDist, defaultParallelism));
 
-        boolean[] innerFlags = poSkewedJoin.getInnerFlags();
-        if (innerFlags[0] && !innerFlags[1]) {
-            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> leftOuterResultKeyValue =
-                    skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD,
-                            buildPartitioner(keyDist, defaultParallelism));
-
-            JavaRDD<Tuple> leftOuterResult = leftOuterResultKeyValue.mapPartitions(new ToValueFunctionGeneric());
-            return leftOuterResult.rdd();
-        }
+//        boolean[] innerFlags = poSkewedJoin.getInnerFlags();
+//        poSkewedJoin.getSchema(0).size();
+//        //Schema inputSchema
+//        if (innerFlags[0] && !innerFlags[1]) {
+//            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> leftOuterResultKeyValue =
+//                    skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD,
+//                            buildPartitioner(keyDist, defaultParallelism));
+//
+//            JavaRDD<Tuple> leftOuterResult = leftOuterResultKeyValue.mapPartitions(new ToValueFunctionGeneric());
+//            return leftOuterResult.rdd();
+//        }
 
 //        Optional<Integer> oi = Optional.of();
 //        oi.absent();
@@ -126,8 +128,11 @@ public class SkewedJoinConverter implements
         // oi.orNull()
         //Optional.fromNullable()
 
-        JavaRDD<Tuple> result = result_KeyValue
-                .mapPartitions(new ToValueFunction());
+        JavaRDD<Tuple> result = doJoin(skewIndexedJavaPairRDD, streamIndexedJavaPairRDD,
+                buildPartitioner(keyDist, defaultParallelism));
+
+//        JavaRDD<Tuple> result = result_KeyValue
+//                .mapPartitions(new ToValueFunction());
 
         // return type is RDD<Tuple>, so take it from JavaRDD<Tuple>
         return result.rdd();
@@ -214,6 +219,14 @@ public class SkewedJoinConverter implements
     private static class ToValueFunctionGeneric<L, R> implements
             FlatMapFunction<Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>>, Tuple>, Serializable {
 
+        private boolean[] innerFlags;
+        private int[] schemaSize;
+
+        public ToValueFunctionGeneric(boolean[] innerFlags, int[] schemaSize) {
+            this.innerFlags = innerFlags;
+            this.schemaSize = schemaSize;
+        }
+
         private class Tuple2TransformIterable implements Iterable<Tuple> {
 
             Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>> in;
@@ -231,19 +244,50 @@ public class SkewedJoinConverter implements
                             Tuple2<PartitionIndexedKey, Tuple2<L, R>> next) {
                         try {
 
-                            L leftTuple = next._2._1;
-                            R rightTuple = next._2._2;
-                            //if(leftTuple instanceof Optional.fromNullable(null)){}
-                            if(rightTuple instanceof Tuple){
+                            L left = next._2._1;
+                            R right = next._2._2;
 
+                            TupleFactory tf = TupleFactory.getInstance();
+                            Tuple result = tf.newTuple();
+
+                            if (!innerFlags[0]) {
+                                Optional<Tuple> leftTuple = (Optional<Tuple>) left;
+                                if (!leftTuple.isPresent()) {
+                                    for (int i = 0; i < schemaSize[0]; i++) {
+                                        result.append(null);
+                                    }
+                                } else {
+                                    for (int i = 0; i < leftTuple.get().size(); i++) {
+                                        result.append(leftTuple.get().get(i));
+                                    }
+                                }
                             }
+
+                            if (!innerFlags[1]) {
+                                Optional<Tuple> rightTuple = (Optional<Tuple>) left;
+                                if (!rightTuple.isPresent()) {
+                                    for (int i = 0; i < schemaSize[0]; i++) {
+                                        result.append(null);
+                                    }
+                                } else {
+                                    for (int i = 0; i < rightTuple.get().size(); i++) {
+                                        result.append(rightTuple.get().get(i));
+                                    }
+                                }
+                            }
+                            return result;
+
+//                            if(right instanceof Optional){
+//                                Optional<Tuple> rightTuple = (Optional<Tuple>)right;
+//                                rightTuple.isPresent();
+//                            }
                             //if(rightTuple.getClass())
                             //getRawType
                             // TypeToken
 
-                            if(leftTuple instanceof Tuple){
-
-                            }
+//                            if(leftTuple instanceof Tuple){
+//
+//                            }
 
 //                            TupleFactory tf = TupleFactory.getInstance();
 //                            Tuple result = tf.newTuple(leftTuple.size()
@@ -261,7 +305,7 @@ public class SkewedJoinConverter implements
 //                                    + result.toDelimitedString(" "));
 //
 //                            return result;
-                            return null;
+                            //return null;
 
                         } catch (Exception e) {
                             System.out.println(e);
@@ -278,6 +322,7 @@ public class SkewedJoinConverter implements
             return new Tuple2TransformIterable(input);
         }
     }
+
     /**
      * get runtime default parallelism
      *
@@ -622,6 +667,30 @@ public class SkewedJoinConverter implements
         }
 
         return new SkewedJoinPartitioner(parallelism);
+    }
+
+    private JavaRDD<Tuple> doJoin(
+            JavaPairRDD<PartitionIndexedKey, Tuple> skewIndexedJavaPairRDD,
+            JavaPairRDD<PartitionIndexedKey, Tuple> streamIndexedJavaPairRDD,
+            SkewedJoinPartitioner partitioner
+    ) {
+
+        boolean[] innerFlags = poSkewedJoin.getInnerFlags();
+        int[] schemaSize = {0, 0};
+        schemaSize[0] = -1;
+        poSkewedJoin.getSchema(0).size();
+
+        // left outer
+        if (innerFlags[0] && !innerFlags[1]) {
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> resultKeyValue
+                    = skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD, partitioner);
+
+            return resultKeyValue.mapPartitions(new ToValueFunctionGeneric(innerFlags, schemaSize));
+        } else {
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> resultKeyValue
+                    = skewIndexedJavaPairRDD.join(streamIndexedJavaPairRDD, partitioner);
+            return resultKeyValue.mapPartitions(new ToValueFunctionGeneric(innerFlags, schemaSize));
+        }
     }
 
 }
