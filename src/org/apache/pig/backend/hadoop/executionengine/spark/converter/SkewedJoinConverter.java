@@ -106,33 +106,8 @@ public class SkewedJoinConverter implements
                 streamIdxKeyJavaRDD.rdd(), SparkUtil.getManifest(PartitionIndexedKey.class),
                 SparkUtil.getManifest(Tuple.class));
 
-        JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> result_KeyValue = skewIndexedJavaPairRDD
-                .join(streamIndexedJavaPairRDD, buildPartitioner(keyDist, defaultParallelism));
-
-//        boolean[] innerFlags = poSkewedJoin.getInnerFlags();
-//        poSkewedJoin.getSchema(0).size();
-//        //Schema inputSchema
-//        if (innerFlags[0] && !innerFlags[1]) {
-//            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> leftOuterResultKeyValue =
-//                    skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD,
-//                            buildPartitioner(keyDist, defaultParallelism));
-//
-//            JavaRDD<Tuple> leftOuterResult = leftOuterResultKeyValue.mapPartitions(new ToValueFunctionGeneric());
-//            return leftOuterResult.rdd();
-//        }
-
-//        Optional<Integer> oi = Optional.of();
-//        oi.absent();
-        //if (oi.isPresent())
-        // oi.get()
-        // oi.orNull()
-        //Optional.fromNullable()
-
         JavaRDD<Tuple> result = doJoin(skewIndexedJavaPairRDD, streamIndexedJavaPairRDD,
                 buildPartitioner(keyDist, defaultParallelism));
-
-//        JavaRDD<Tuple> result = result_KeyValue
-//                .mapPartitions(new ToValueFunction());
 
         // return type is RDD<Tuple>, so take it from JavaRDD<Tuple>
         return result.rdd();
@@ -160,69 +135,17 @@ public class SkewedJoinConverter implements
         return new OperatorKey(poSkewedJoin.getOperatorKey().scope, NodeIdGenerator.getGenerator().getNextNodeId(poSkewedJoin.getOperatorKey().scope));
     }
 
-    private static class ToValueFunction implements
-            FlatMapFunction<Iterator<Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>>>, Tuple>, Serializable {
-
-        private class Tuple2TransformIterable implements Iterable<Tuple> {
-
-            Iterator<Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>>> in;
-
-            Tuple2TransformIterable(
-                    Iterator<Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>>> input) {
-                in = input;
-            }
-
-            public Iterator<Tuple> iterator() {
-                return new IteratorTransform<Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>>, Tuple>(
-                        in) {
-                    @Override
-                    protected Tuple transform(
-                            Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>> next) {
-                        try {
-
-                            Tuple leftTuple = next._2._1;
-                            Tuple rightTuple = next._2._2;
-
-                            TupleFactory tf = TupleFactory.getInstance();
-                            Tuple result = tf.newTuple(leftTuple.size()
-                                    + rightTuple.size());
-
-                            // append the two tuples together to make a
-                            // resulting tuple
-                            for (int i = 0; i < leftTuple.size(); i++)
-                                result.set(i, leftTuple.get(i));
-                            for (int i = 0; i < rightTuple.size(); i++)
-                                result.set(i + leftTuple.size(),
-                                        rightTuple.get(i));
-
-                            System.out.println("MJC: Result = "
-                                    + result.toDelimitedString(" "));
-
-                            return result;
-
-                        } catch (Exception e) {
-                            System.out.println(e);
-                        }
-                        return null;
-                    }
-                };
-            }
-        }
-
-        @Override
-        public Iterable<Tuple> call(
-                Iterator<Tuple2<PartitionIndexedKey, Tuple2<Tuple, Tuple>>> input) {
-            return new Tuple2TransformIterable(input);
-        }
-    }
-
-    private static class ToValueFunctionGeneric<L, R> implements
+    /**
+     * @param <L> be generic because it can be Optional<Tuple> or Tuple
+     * @param <R> be generic because it can be Optional<Tuple> or Tuple
+     */
+    private static class ToValueFunction<L, R> implements
             FlatMapFunction<Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>>, Tuple>, Serializable {
 
         private boolean[] innerFlags;
         private int[] schemaSize;
 
-        public ToValueFunctionGeneric(boolean[] innerFlags, int[] schemaSize) {
+        public ToValueFunction(boolean[] innerFlags, int[] schemaSize) {
             this.innerFlags = innerFlags;
             this.schemaSize = schemaSize;
         }
@@ -250,63 +173,43 @@ public class SkewedJoinConverter implements
                             TupleFactory tf = TupleFactory.getInstance();
                             Tuple result = tf.newTuple();
 
+                            Tuple leftTuple = tf.newTuple();
                             if (!innerFlags[0]) {
-                                Optional<Tuple> leftTuple = (Optional<Tuple>) left;
-                                if (!leftTuple.isPresent()) {
+                                // left should be Optional<Tuple>
+                                Optional<Tuple> leftOption = (Optional<Tuple>) left;
+                                if (!leftOption.isPresent()) {
                                     for (int i = 0; i < schemaSize[0]; i++) {
-                                        result.append(null);
+                                        leftTuple.append(null);
                                     }
                                 } else {
-                                    for (int i = 0; i < leftTuple.get().size(); i++) {
-                                        result.append(leftTuple.get().get(i));
-                                    }
+                                    leftTuple = leftOption.get();
                                 }
+                            } else {
+                                leftTuple = (Tuple) left;
+                            }
+                            for (int i = 0; i < leftTuple.size(); i++) {
+                                result.append(leftTuple.get(i));
                             }
 
+                            Tuple rightTuple = tf.newTuple();
                             if (!innerFlags[1]) {
-                                Optional<Tuple> rightTuple = (Optional<Tuple>) left;
-                                if (!rightTuple.isPresent()) {
-                                    for (int i = 0; i < schemaSize[0]; i++) {
-                                        result.append(null);
+                                // right should be Optional<Tuple>
+                                Optional<Tuple> rightOption = (Optional<Tuple>) right;
+                                if (!rightOption.isPresent()) {
+                                    for (int i = 0; i < schemaSize[1]; i++) {
+                                        rightTuple.append(null);
                                     }
                                 } else {
-                                    for (int i = 0; i < rightTuple.get().size(); i++) {
-                                        result.append(rightTuple.get().get(i));
-                                    }
+                                    rightTuple = rightOption.get();
                                 }
+                            } else {
+                                rightTuple = (Tuple) right;
                             }
+                            for (int i = 0; i < rightTuple.size(); i++) {
+                                result.append(rightTuple.get(i));
+                            }
+
                             return result;
-
-//                            if(right instanceof Optional){
-//                                Optional<Tuple> rightTuple = (Optional<Tuple>)right;
-//                                rightTuple.isPresent();
-//                            }
-                            //if(rightTuple.getClass())
-                            //getRawType
-                            // TypeToken
-
-//                            if(leftTuple instanceof Tuple){
-//
-//                            }
-
-//                            TupleFactory tf = TupleFactory.getInstance();
-//                            Tuple result = tf.newTuple(leftTuple.size()
-//                                    + rightTuple.size());
-//
-//                            // append the two tuples together to make a
-//                            // resulting tuple
-//                            for (int i = 0; i < leftTuple.size(); i++)
-//                                result.set(i, leftTuple.get(i));
-//                            for (int i = 0; i < rightTuple.size(); i++)
-//                                result.set(i + leftTuple.size(),
-//                                        rightTuple.get(i));
-//
-//                            System.out.println("MJC: Result = "
-//                                    + result.toDelimitedString(" "));
-//
-//                            return result;
-                            //return null;
-
                         } catch (Exception e) {
                             System.out.println(e);
                         }
@@ -669,27 +572,53 @@ public class SkewedJoinConverter implements
         return new SkewedJoinPartitioner(parallelism);
     }
 
+    /**
+     * do all kinds of Join (inner, left outer, right outer, full outer)
+     *
+     * @param skewIndexedJavaPairRDD
+     * @param streamIndexedJavaPairRDD
+     * @param partitioner
+     * @return
+     */
     private JavaRDD<Tuple> doJoin(
             JavaPairRDD<PartitionIndexedKey, Tuple> skewIndexedJavaPairRDD,
             JavaPairRDD<PartitionIndexedKey, Tuple> streamIndexedJavaPairRDD,
-            SkewedJoinPartitioner partitioner
-    ) {
+            SkewedJoinPartitioner partitioner) {
 
         boolean[] innerFlags = poSkewedJoin.getInnerFlags();
         int[] schemaSize = {0, 0};
-        schemaSize[0] = -1;
-        poSkewedJoin.getSchema(0).size();
+        for (int i = 0; i < 2; i++) {
+            if (poSkewedJoin.getSchema(i) != null) {
+                schemaSize[i] = poSkewedJoin.getSchema(i).size();
+            }
+        }
 
-        // left outer
-        if (innerFlags[0] && !innerFlags[1]) {
-            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> resultKeyValue
-                    = skewIndexedJavaPairRDD.leftOuterJoin(streamIndexedJavaPairRDD, partitioner);
+        ToValueFunction toValueFun = new ToValueFunction(innerFlags, schemaSize);
 
-            return resultKeyValue.mapPartitions(new ToValueFunctionGeneric(innerFlags, schemaSize));
+        if (innerFlags[0] && innerFlags[1]) {
+            // inner join
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> resultKeyValue = skewIndexedJavaPairRDD.
+                    join(streamIndexedJavaPairRDD, partitioner);
+
+            return resultKeyValue.mapPartitions(toValueFun);
+        } else if (innerFlags[0] && !innerFlags[1]) {
+            // left outer join
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Optional<Tuple>>> resultKeyValue = skewIndexedJavaPairRDD.
+                    leftOuterJoin(streamIndexedJavaPairRDD, partitioner);
+
+            return resultKeyValue.mapPartitions(toValueFun);
+        } else if (!innerFlags[0] && innerFlags[1]) {
+            // right outer join
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Optional<Tuple>, Tuple>> resultKeyValue = skewIndexedJavaPairRDD.
+                    rightOuterJoin(streamIndexedJavaPairRDD, partitioner);
+
+            return resultKeyValue.mapPartitions(toValueFun);
         } else {
-            JavaPairRDD<PartitionIndexedKey, Tuple2<Tuple, Tuple>> resultKeyValue
-                    = skewIndexedJavaPairRDD.join(streamIndexedJavaPairRDD, partitioner);
-            return resultKeyValue.mapPartitions(new ToValueFunctionGeneric(innerFlags, schemaSize));
+            // full outer join
+            JavaPairRDD<PartitionIndexedKey, Tuple2<Optional<Tuple>, Optional<Tuple>>> resultKeyValue = skewIndexedJavaPairRDD.
+                    fullOuterJoin(streamIndexedJavaPairRDD, partitioner);
+
+            return resultKeyValue.mapPartitions(toValueFun);
         }
     }
 
