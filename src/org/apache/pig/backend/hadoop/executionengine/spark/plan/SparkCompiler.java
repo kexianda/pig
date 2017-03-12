@@ -1554,7 +1554,7 @@ public class SparkCompiler extends PhyPlanVisitor {
 
 		for (int i=0; i<transformPlans.size(); i++) {
 			eps.add(transformPlans.get(i));
-			flat.add(true);
+			flat.add(i == transformPlans.size() - 1 ? true : false);
 		}
 
 		// This foreach will pick the sort key columns from the POPoissonSample output
