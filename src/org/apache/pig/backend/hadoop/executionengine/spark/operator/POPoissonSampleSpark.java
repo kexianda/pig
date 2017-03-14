@@ -126,9 +126,15 @@ public class POPoissonSampleSpark extends PhysicalOperator {
         Result res;
         res = processInput();
 
-        // if reaches at the end, pick last sampled record and return
-        if (this.isEndOfInput() && newSample != null) {
-            return createNumRowTuple((Tuple)newSample.result);
+        // if reaches at the end, pick a record and return
+        if (this.isEndOfInput()) {
+            // if skip enough, and the last record is OK.
+            if ( numSkipped == skipInterval
+                    && res.returnStatus == POStatus.STATUS_OK) {
+                return createNumRowTuple((Tuple) res.result);
+            } else if (newSample != null) {
+                return createNumRowTuple((Tuple) newSample.result);
+            }
         }
 
         // just return to read next record from input
@@ -197,6 +203,9 @@ public class POPoissonSampleSpark extends PhysicalOperator {
         if (numRowsSampled < 5) {
             skipInterval = skipInterval / (10 - numRowsSampled);
         }
+
+        // only for debugging
+        skipInterval = 1;
 
         ++numRowsSampled;
     }
