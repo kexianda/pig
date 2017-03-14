@@ -233,6 +233,9 @@ public class POPackage extends PhysicalOperator {
                 // the last input in a ReadOnceBag and let the Packager decide
                 // whether or not to read into memory
 
+                // for debugging
+                useDefaultBag = true;
+
                 // create bag to pull all tuples out of iterator
                 for (int i = 0; i < numInputs; i++) {
                     dbs[i] = useDefaultBag ? mBagFactory.newDefaultBag()

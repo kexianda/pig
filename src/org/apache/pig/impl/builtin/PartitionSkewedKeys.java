@@ -239,6 +239,12 @@ public class PartitionSkewedKeys extends EvalFunc<Map<String, Object>> {
             log.debug("key " + currentTuple + " need " + redCount + " reducers");
         }
 
+        // just for debugging
+        if (redCount<2) {
+            redCount = 2;
+        }
+
+
         // this is not a skewed key
         if (redCount <= 1) {
             return new Pair<Tuple, Integer>(null, 1);
