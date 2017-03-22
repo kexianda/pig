@@ -31,7 +31,8 @@ public class SplitConverter implements RDDConverter<Tuple, Tuple, POSplit> {
     public RDD<Tuple> convert(List<RDD<Tuple>> predecessors, POSplit poSplit)
             throws IOException {
         SparkUtil.assertPredecessorSize(predecessors, poSplit, 1);
-        return predecessors.get(0);
+        //return predecessors.get(0);
+        return predecessors.get(0).cache();
     }
 
 }

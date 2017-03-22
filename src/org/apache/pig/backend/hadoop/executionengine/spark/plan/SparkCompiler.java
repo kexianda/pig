@@ -700,6 +700,13 @@ public class SparkCompiler extends PhyPlanVisitor {
 			Random r = new Random();
 			String pigKeyDistFile = "pig.keyDistFile" + r.nextInt();
 
+			FileSpec fSpec = getTempFileSpec();
+			SparkOperator tmpSparkOper = compiledInputs[0];
+			POStore str = getStore();
+			str.setSFile(fSpec);
+			tmpSparkOper.physicalPlan.addAsLeaf(str);
+			sparkPlan.add(tmpSparkOper);
+
 			// firstly,  build the sampling job
 			SparkOperator sampleSparkOp = new SparkOperator(new OperatorKey(scope,nig.getNextNodeId(scope)));
 			sampleSparkOp.physicalPlan = compiledInputs[0].physicalPlan.clone();
@@ -718,6 +725,8 @@ public class SparkCompiler extends PhyPlanVisitor {
 
 			sampleSparkOp.markSampler();
 			sparkPlan.add(sampleSparkOp);
+
+			sparkPlan.connect(tmpSparkOper, sampleSparkOp);
 
 			// secondly, build the join job.
 			addToPlan(op);
