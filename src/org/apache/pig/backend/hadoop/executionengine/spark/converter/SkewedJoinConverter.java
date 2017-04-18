@@ -110,8 +110,10 @@ public class SkewedJoinConverter implements
                 streamIdxKeyJavaRDD.rdd(), SparkUtil.getManifest(PartitionIndexedKey.class),
                 SparkUtil.getManifest(Tuple.class));
 
-        JavaRDD<Tuple> result = doJoin(skewIndexedJavaPairRDD, streamIndexedJavaPairRDD,
-                buildPartitioner(keyDist, defaultParallelism));
+        JavaRDD<Tuple> result = doJoin(skewIndexedJavaPairRDD,
+                streamIndexedJavaPairRDD,
+                buildPartitioner(keyDist, defaultParallelism),
+                keyDist);
 
         // return type is RDD<Tuple>, so take it from JavaRDD<Tuple>
         return result.rdd();
@@ -149,9 +151,15 @@ public class SkewedJoinConverter implements
         private boolean[] innerFlags;
         private int[] schemaSize;
 
-        public ToValueFunction(boolean[] innerFlags, int[] schemaSize) {
+        private final Broadcast<List<Tuple>> keyDist;
+
+        transient private boolean initialized = false;
+        transient protected Map<Tuple, Pair<Integer, Integer>> reducerMap;
+
+        public ToValueFunction(boolean[] innerFlags, int[] schemaSize, Broadcast<List<Tuple>> keyDist) {
             this.innerFlags = innerFlags;
             this.schemaSize = schemaSize;
+            this.keyDist = keyDist;
         }
 
         private class Tuple2TransformIterable implements Iterable<Tuple> {
@@ -182,8 +190,15 @@ public class SkewedJoinConverter implements
                                 // left should be Optional<Tuple>
                                 Optional<Tuple> leftOption = (Optional<Tuple>) left;
                                 if (!leftOption.isPresent()) {
-                                    for (int i = 0; i < schemaSize[0]; i++) {
-                                        leftTuple.append(null);
+                                    PartitionIndexedKey pKey = (PartitionIndexedKey)(next._1);
+                                    // Add an empty record for outer join.
+                                    // Notice: only join the first reduce key if it is right outer join
+                                    if (isFirstReduceKey(pKey)) {
+                                        for (int i = 0; i < schemaSize[0]; i++) {
+                                            leftTuple.append(null);
+                                        }
+                                    } else {
+                                        return this.next();
                                     }
                                 } else {
                                     leftTuple = leftOption.get();
@@ -231,6 +246,26 @@ public class SkewedJoinConverter implements
         public Iterable<Tuple> call(
                 Iterator<Tuple2<PartitionIndexedKey, Tuple2<L, R>>> input) {
             return new Tuple2TransformIterable(input);
+        }
+
+        private boolean isFirstReduceKey(PartitionIndexedKey pKey) {
+            // non-skewed key
+            if (pKey.getPartitionId() == -1) {
+                return true;
+            }
+
+            if (!initialized) {
+                Integer[] reducers = new Integer[1];
+                reducerMap = loadKeyDistribution(keyDist, reducers);
+                initialized = true;
+            }
+
+            Pair<Integer, Integer> indexes = reducerMap.get(pKey.getKey());
+            if (indexes != null && pKey.getPartitionId() != indexes.first) {
+                return false;
+            }
+
+            return true;
         }
     }
 
@@ -562,7 +597,8 @@ public class SkewedJoinConverter implements
     private JavaRDD<Tuple> doJoin(
             JavaPairRDD<PartitionIndexedKey, Tuple> skewIndexedJavaPairRDD,
             JavaPairRDD<PartitionIndexedKey, Tuple> streamIndexedJavaPairRDD,
-            SkewedJoinPartitioner partitioner) {
+            SkewedJoinPartitioner partitioner,
+            Broadcast<List<Tuple>> keyDist) {
 
         boolean[] innerFlags = poSkewedJoin.getInnerFlags();
         int[] schemaSize = {0, 0};
@@ -572,7 +608,7 @@ public class SkewedJoinConverter implements
             }
         }
 
-        ToValueFunction toValueFun = new ToValueFunction(innerFlags, schemaSize);
+        ToValueFunction toValueFun = new ToValueFunction(innerFlags, schemaSize, keyDist);
 
         if (innerFlags[0] && innerFlags[1]) {
             // inner join
