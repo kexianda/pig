@@ -87,6 +87,7 @@ import org.apache.pig.backend.hadoop.executionengine.spark.converter.LocalRearra
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeCogroupConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.MergeJoinConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.PackageConverter;
+import org.apache.pig.backend.hadoop.executionengine.spark.converter.PersistConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.PoissonSampleConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RDDConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.RankConverter;
@@ -100,6 +101,7 @@ import org.apache.pig.backend.hadoop.executionengine.spark.converter.StreamConve
 import org.apache.pig.backend.hadoop.executionengine.spark.converter.UnionConverter;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POGlobalRearrangeSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POJoinGroupSpark;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POPersistSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POPoissonSampleSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POReduceBySpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.operator.POSampleSortSpark;
@@ -217,6 +219,7 @@ public class SparkLauncher extends Launcher {
         convertMap.put(POBroadcastSpark.class, new BroadcastConverter(sparkContext));
         convertMap.put(POSampleSortSpark.class, new SparkSampleSortConverter());
         convertMap.put(POPoissonSampleSpark.class, new PoissonSampleConverter());
+        convertMap.put(POPersistSpark.class, new PersistConverter());
 
         uploadResources(sparkplan);
         new JobGraphBuilder(sparkplan, convertMap, sparkStats, sparkContext, jobMetricsListener, jobGroupID, jobConf, pigContext).visit();

@@ -29,6 +29,7 @@ import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.Physica
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POLoad;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POSplit;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.relationalOperators.POStore;
+import org.apache.pig.backend.hadoop.executionengine.spark.operator.POPersistSpark;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOpPlanVisitor;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperPlan;
 import org.apache.pig.backend.hadoop.executionengine.spark.plan.SparkOperator;
@@ -118,8 +119,13 @@ public class MultiQueryOptimizerSpark extends SparkOpPlanVisitor {
                 POStore poStore = null;
                 if (firstNodeLeaf != null && firstNodeLeaf instanceof POStore) {
                     poStore = (POStore) firstNodeLeaf;
+
                     PhysicalOperator predOfPoStore = sparkOp.physicalPlan.getPredecessors(poStore).get(0);
                     sparkOp.physicalPlan.remove(poStore); // remove  unnecessary store
+                    // cache it
+                    POPersistSpark poCache = new POPersistSpark(new OperatorKey(scope, nig.getNextNodeId(scope)));
+                    sparkOp.physicalPlan.addAsLeaf(poCache);
+
                     POSplit poSplit = createSplit();
                     ArrayList<SparkOperator> spliteesCopy = new ArrayList
                             <SparkOperator>(splittees);
@@ -134,7 +140,7 @@ public class MultiQueryOptimizerSpark extends SparkOpPlanVisitor {
                                     splitee.physicalPlan.remove(poLoad);  // remove  unnecessary load
                                     for (PhysicalOperator successorOfPoLoad : successorofPoLoadsCopy) {
                                         //we store from to relationship in SparkOperator#multiQueryOptimizeConnectionMap
-                                        sparkOp.addMultiQueryOptimizeConnectionItem(successorOfPoLoad.getOperatorKey(), predOfPoStore.getOperatorKey());
+                                        sparkOp.addMultiQueryOptimizeConnectionItem(successorOfPoLoad.getOperatorKey(), poCache.getOperatorKey());
                                         LOG.debug(String.format("add multiQueryOptimize connection item: to:%s, from:%s for %s",
                                                 successorOfPoLoad.toString(), predOfPoStore.getOperatorKey().toString(), splitee.getOperatorKey()));
                                     }
@@ -145,6 +151,7 @@ public class MultiQueryOptimizerSpark extends SparkOpPlanVisitor {
                         addSubPlanPropertiesToParent(sparkOp, splitee);
                         removeSplittee(getPlan(), sparkOp, splitee);
                     }
+
                     sparkOp.physicalPlan.addAsLeaf(poSplit);
                 }
             }
