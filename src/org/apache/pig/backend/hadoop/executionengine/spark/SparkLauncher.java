@@ -219,7 +219,7 @@ public class SparkLauncher extends Launcher {
         convertMap.put(POBroadcastSpark.class, new BroadcastConverter(sparkContext));
         convertMap.put(POSampleSortSpark.class, new SparkSampleSortConverter());
         convertMap.put(POPoissonSampleSpark.class, new PoissonSampleConverter());
-        convertMap.put(POPersistSpark.class, new PersistConverter());
+        convertMap.put(POPersistSpark.class, new PersistConverter(pigContext));
 
         uploadResources(sparkplan);
         new JobGraphBuilder(sparkplan, convertMap, sparkStats, sparkContext, jobMetricsListener, jobGroupID, jobConf, pigContext).visit();

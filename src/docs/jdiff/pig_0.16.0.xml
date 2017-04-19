@@ -3644,6 +3644,15 @@
  Default is 350MB]]>
       </doc>
     </field>
+    <field name="PIG_SPARK_PERSIST_STORAGE_LEVEL" type="java.lang.String"
+      transient="false" volatile="false"
+      static="true" final="true" visibility="public"
+      deprecated="not deprecated">
+      <doc>
+      <![CDATA[the StorageLevel for persist/cache in Spark mode.
+      Default is MEMORY_AND_DISK]]>
+      </doc>
+    </field>
     <field name="CALLER_ID" type="java.lang.String"
       transient="false" volatile="false"
       static="true" final="true" visibility="public"

@@ -17,6 +17,7 @@
  */
 package org.apache.pig.backend.hadoop.executionengine.spark.operator;
 
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.pig.backend.executionengine.ExecException;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.PhysicalOperator;
 import org.apache.pig.backend.hadoop.executionengine.physicalLayer.plans.PhyPlanVisitor;
@@ -51,7 +52,7 @@ public class POPersistSpark extends PhysicalOperator {
 
     @Override
     public boolean supportsMultipleOutputs() {
-        return false;
+        return true;
     }
 
     @Override
