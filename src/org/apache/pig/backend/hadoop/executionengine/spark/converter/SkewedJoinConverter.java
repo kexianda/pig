@@ -190,10 +190,9 @@ public class SkewedJoinConverter implements
                                 // left should be Optional<Tuple>
                                 Optional<Tuple> leftOption = (Optional<Tuple>) left;
                                 if (!leftOption.isPresent()) {
-                                    PartitionIndexedKey pKey = (PartitionIndexedKey)(next._1);
-                                    // Add an empty record for outer join.
-                                    // Notice: only join the first reduce key if it is right outer join
-                                    if (isFirstReduceKey(pKey)) {
+                                    // Add an empty left record for RIGHT OUTER JOIN.
+                                    // Notice: if it is a skewed, only join the first reduce key
+                                    if (isFirstReduceKey(next._1)) {
                                         for (int i = 0; i < schemaSize[0]; i++) {
                                             leftTuple.append(null);
                                         }
@@ -262,6 +261,8 @@ public class SkewedJoinConverter implements
 
             Pair<Integer, Integer> indexes = reducerMap.get(pKey.getKey());
             if (indexes != null && pKey.getPartitionId() != indexes.first) {
+                // return false only when the key is skewed
+                // and it is not the first reduce key.
                 return false;
             }
 
